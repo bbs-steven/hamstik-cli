@@ -33,6 +33,16 @@ cargo run -p hamstik-cli -- --help
 cargo run -p hamstik-cli -- --version
 ```
 
+Once built, sign in and start working (a Personal Access Token is stored in the
+OS credential store):
+
+```bash
+hamstik auth login --with-token      # reads the PAT from stdin
+hamstik context init --org acme --project HAM
+hamstik work list --mine
+hamstik work start HAM-1
+```
+
 ## Why Hamstik CLI?
 
 ![Why Hamstik CLI?](assets/github/why-hamstik-cli.png)
@@ -70,17 +80,27 @@ the live Hamstik service remains the authoritative implementation.
 
 ## Current capabilities
 
-The repository is early in its implementation. Today it provides:
+The Dogfooding Alpha is implemented. Today the CLI provides:
 
 - a native Rust workspace that builds the `hamstik` executable;
-- the root CLI parser with `--help` and `--version`;
-- the `hamstik-api-client` crate foundation for the Hamstik Public API v1;
+- a typed client for the Hamstik Public API v1 (`/api/v1`) with pagination,
+  retries, and idempotency-key support;
+- authentication and profiles — `hamstik auth login|status|list|switch|logout`,
+  with secrets held only in the OS credential store;
+- working context — `hamstik context show|set|clear|init` backed by a
+  project-local `.hamstik.toml` plus global profile defaults;
+- organizations and projects — `hamstik org ...` and `hamstik project ...`
+  (`list`, `view`, `use`);
+- work items — `hamstik work list|view|create|edit`, status transitions
+  (`transitions`, `transition`, `start`, `close`), and comments
+  (`work comment list|add`);
+- automation-friendly output via `--json` / `--quiet` and stable exit codes;
+- shell completions (`hamstik completion <shell>`) and connectivity
+  diagnostics (`hamstik doctor`);
 - cross-platform CI on Linux, Windows, and macOS.
 
-Command families such as authentication, context, organizations, projects, and
-work items are specified in the design documents but are **not implemented
-yet**. See the [design documents](#design-documents) for where the CLI is
-headed.
+OAuth, the MCP server, and the Agent Skill remain future work. See the
+[design documents](#design-documents) for where the CLI is headed.
 
 ## Build from source
 

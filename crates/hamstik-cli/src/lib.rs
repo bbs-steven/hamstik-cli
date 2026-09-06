@@ -1,0 +1,23 @@
+// Copyright 2026 Blackboard Studios
+// SPDX-License-Identifier: Apache-2.0
+
+//! Hamstik CLI implementation crate.
+//!
+//! `main.rs` is a thin entrypoint; all logic lives here behind [`app::run`] so
+//! it can be unit- and integration-tested without spawning the process.
+
+pub mod app;
+pub mod args;
+pub mod config;
+pub mod context;
+pub mod credentials;
+pub mod environment;
+pub mod error;
+pub mod exit;
+pub mod input;
+pub mod output;
+
+pub mod commands;
+
+pub use error::{CliError, ErrorKind};
+pub use exit::SUCCESS;
