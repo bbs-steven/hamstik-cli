@@ -224,9 +224,11 @@ fn list(session: &mut Session<'_>) -> Result<(), CliError> {
 }
 
 fn switch(session: &mut Session<'_>, name: &str) -> Result<(), CliError> {
-    crate::config::validate_profile_name(name)?;
     let mut config = session.config.load()?;
     if !config.profiles.contains_key(name) {
+        // Report invalid names clearly; existing (possibly legacy) names are
+        // always switchable, so validation only guards genuinely bad input.
+        crate::config::validate_profile_name(name)?;
         return Err(CliError::config(format!("no such profile: {name}")));
     }
     config.active_profile = Some(name.to_string());

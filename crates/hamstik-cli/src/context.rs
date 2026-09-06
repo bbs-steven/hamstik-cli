@@ -101,11 +101,13 @@ pub fn select_profile(
         .or_else(|| config.active_profile.clone());
     match requested {
         Some(name) => {
-            crate::config::validate_profile_name(&name)?;
-            if !config.profiles.contains_key(&name) {
-                return Err(CliError::config(format!("no such profile: {name}")));
+            // Accept names already present in the config even if they predate
+            // stricter validation (e.g. legacy hosts that included a port).
+            if config.profiles.contains_key(&name) {
+                return Ok(Some(name));
             }
-            Ok(Some(name))
+            crate::config::validate_profile_name(&name)?;
+            Err(CliError::config(format!("no such profile: {name}")))
         }
         None => Ok(None),
     }
@@ -380,5 +382,23 @@ mod tests {
         assert_eq!(load(&path).unwrap(), context);
         fs::write(&path, "version = 1\nbogus = 1\n").unwrap();
         assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn select_profile_accepts_existing_legacy_name() {
+        let mut config = ConfigFile::default();
+        config
+            .profiles
+            .insert("localhost:3000-test".to_string(), profile());
+        config.active_profile = Some("localhost:3000-test".to_string());
+        let selected = select_profile(&config, None, &MapEnvironment::new()).unwrap();
+        assert_eq!(selected.as_deref(), Some("localhost:3000-test"));
+    }
+
+    #[test]
+    fn select_profile_rejects_invalid_missing_name() {
+        let config = ConfigFile::default();
+        let err = select_profile(&config, Some("bad name"), &MapEnvironment::new()).unwrap_err();
+        assert!(err.message.contains("invalid profile name"));
     }
 }

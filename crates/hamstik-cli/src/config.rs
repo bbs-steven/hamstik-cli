@@ -135,13 +135,34 @@ pub fn validate_profile_name(name: &str) -> Result<(), CliError> {
     }
 }
 
-/// Produces a `<host-without-scheme>-<email-localpart>` profile name.
+/// Replaces characters that are not permitted in a profile name with a hyphen,
+/// so auto-generated names (e.g. from hosts that include a port) stay valid.
+fn sanitize_profile_segment(segment: &str) -> String {
+    segment
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+/// Produces a `<host-without-scheme>-<email-localpart>` profile name, reduced
+/// to characters accepted by [`validate_profile_name`] (a host port's colon
+/// becomes a hyphen).
 #[must_use]
 pub fn profile_auto_name(host: &str, email: &str) -> String {
     let authority = host.split_once("://").map(|(_, rest)| rest).unwrap_or(host);
     let authority = authority.trim_matches('/');
     let local = email.split('@').next().unwrap_or(email);
-    format!("{authority}-{local}")
+    format!(
+        "{}-{}",
+        sanitize_profile_segment(authority),
+        sanitize_profile_segment(local)
+    )
 }
 
 /// Returns a name not already used by an unrelated profile.
@@ -209,6 +230,13 @@ mod tests {
             profile_auto_name("https://hamstik.com", "steven@example.com"),
             "hamstik.com-steven"
         );
+    }
+
+    #[test]
+    fn auto_name_sanitizes_host_port() {
+        let name = profile_auto_name("http://localhost:3000", "test@hamstik.dev");
+        assert_eq!(name, "localhost-3000-test");
+        validate_profile_name(&name).unwrap();
     }
 
     #[test]
