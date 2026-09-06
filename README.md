@@ -43,6 +43,25 @@ hamstik work list --mine
 hamstik work start HAM-1
 ```
 
+## Terminal banner
+
+Running `hamstik` with no command — or with `--help` / `--version` — prints the
+identity banner:
+
+```text
+              _                         _   _ _
+             | |__   __ _ _ __ ___  ___| |_(_) | __
+    (\___/)  | '_ \ / _` | '_ ` _ \/ __| __| | |/ /
+    (='.'=)  | | | | (_| | | | | | \__ \ |_| |   <
+    (")_(")  |_| |_|\__,_|_| |_| |_|___/\__|_|_|\_
+
+🐹 hamstik cli v0.1.0      © Blackboard Studios LLC
+```
+
+The banner appears only on the human root help and version surfaces (`hamstik`,
+`-h`/`--help`, `-V`/`--version`, and `version`). It is intentionally omitted
+from `--json` machine output, subcommand help, and completion scripts.
+
 ## Why Hamstik CLI?
 
 ![Why Hamstik CLI?](assets/github/why-hamstik-cli.png)

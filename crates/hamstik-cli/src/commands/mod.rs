@@ -37,7 +37,7 @@ fn version(session: &mut Session<'_>) -> Result<(), CliError> {
     } else {
         session
             .out
-            .line(&format!("hamstik {version}"))
+            .line(&crate::banner::banner())
             .map_err(CliError::general)
     }
 }

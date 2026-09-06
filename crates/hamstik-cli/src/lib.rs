@@ -8,6 +8,7 @@
 
 pub mod app;
 pub mod args;
+pub mod banner;
 pub mod config;
 pub mod context;
 pub mod credentials;

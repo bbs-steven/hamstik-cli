@@ -330,3 +330,123 @@ async fn doctor_fails_without_credentials() {
         .code(3)
         .stdout(predicate::str::contains("no token available"));
 }
+
+// ---- Banner (identity) surfaces -------------------------------------------
+
+/// The banner art fragment used for presence/absence assertions (literal, not a
+/// regex — `predicates::str::contains` matches substrings).
+const BANNER_ART: &str = r"(\___/)";
+const BANNER_FOOTER: &str = "© Blackboard Studios LLC";
+
+/// A `hamstik` command isolated from any host/token/keyring. Only used for the
+/// identity surfaces (help/version/bare/completion/parse-errors), which are
+/// short-circuited during parsing and never touch the network or OS keyring.
+fn banner_command(dir: &TempDir) -> Command {
+    let mut cmd = Command::cargo_bin("hamstik").expect("hamstik binary");
+    cmd.env("HAMSTIK_CONFIG", dir.path().join("config.toml"));
+    for var in [
+        "HAMSTIK_HOST",
+        "HAMSTIK_TOKEN",
+        "HAMSTIK_PROFILE",
+        "HAMSTIK_ORG",
+        "HAMSTIK_PROJECT",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd.current_dir(dir.path());
+    cmd
+}
+
+#[test]
+fn root_help_prints_banner_to_stdout() {
+    let dir = TempDir::new().unwrap();
+    banner_command(&dir)
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(BANNER_ART))
+        .stdout(predicate::str::contains(BANNER_FOOTER))
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")))
+        .stdout(predicate::str::contains("Usage: hamstik"))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn short_help_prints_banner_to_stdout() {
+    let dir = TempDir::new().unwrap();
+    banner_command(&dir)
+        .arg("-h")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(BANNER_ART))
+        .stdout(predicate::str::contains(BANNER_FOOTER));
+}
+
+#[test]
+fn bare_invocation_prints_banner_to_stdout_and_exits_two() {
+    let dir = TempDir::new().unwrap();
+    banner_command(&dir)
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(BANNER_ART))
+        .stdout(predicate::str::contains(BANNER_FOOTER))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn version_surfaces_print_banner() {
+    let dir = TempDir::new().unwrap();
+    for args in [&["--version"][..], &["-V"][..], &["version"][..]] {
+        banner_command(&dir)
+            .args(args)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(BANNER_ART))
+            .stdout(predicate::str::contains(BANNER_FOOTER))
+            .stdout(predicate::str::contains(format!(
+                "v{}",
+                env!("CARGO_PKG_VERSION")
+            )));
+    }
+}
+
+#[test]
+fn version_json_is_machine_readable_and_banner_free() {
+    let dir = TempDir::new().unwrap();
+    let output = banner_command(&dir)
+        .args(["version", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains(BANNER_ART), "banner leaked into --json");
+    let body: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn subcommand_help_and_completion_are_banner_free() {
+    let dir = TempDir::new().unwrap();
+    for args in [
+        &["work", "--help"][..],
+        &["auth", "login", "--help"][..],
+        &["completion", "bash"][..],
+    ] {
+        banner_command(&dir)
+            .args(args)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(BANNER_ART).not());
+    }
+}
+
+#[test]
+fn unrecognized_subcommand_has_no_banner() {
+    let dir = TempDir::new().unwrap();
+    banner_command(&dir)
+        .arg("bogus")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(BANNER_ART).not())
+        .stderr(predicate::str::contains("unrecognized subcommand"));
+}
