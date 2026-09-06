@@ -1,0 +1,21 @@
+[package]
+name = "hamstik-cli"
+description = "Official command-line interface for Hamstik"
+publish = false
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "hamstik"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+
+[lints]
+workspace = true

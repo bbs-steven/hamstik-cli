@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "crates/hamstik-cli",
+    "crates/hamstik-api-client",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/bbs-steven/hamstik-cli"
+homepage = "https://hamstik.com"
+authors = ["Blackboard Studios"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+lto = "thin"

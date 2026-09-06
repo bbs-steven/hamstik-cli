@@ -1,0 +1,2456 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Hamstik Public API",
+    "version": "1.0.0",
+    "description": "Stable programmatic access to Hamstik through Personal Access Tokens. Cursors are opaque, error codes are stable, and public resource fields are explicit projections."
+  },
+  "servers": [
+    {
+      "url": "https://hamstik.com",
+      "description": "Hamstik"
+    }
+  ],
+  "paths": {
+    "/api/v1/me": {
+      "get": {
+        "operationId": "getMe",
+        "summary": "Get the authenticated user and credential context",
+        "responses": {
+          "200": {
+            "description": "Authenticated identity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenApi",
+        "summary": "Get the Public API contract",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1.1 document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/organizations": {
+      "get": {
+        "operationId": "listOrganizations",
+        "summary": "List accessible Organizations",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the organization:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Results per page (1-100, default 50).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the preceding page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Organization page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationList"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}": {
+      "get": {
+        "operationId": "getOrganization",
+        "summary": "Get an Organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the organization:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects": {
+      "get": {
+        "operationId": "listProjects",
+        "summary": "List Projects in an Organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the project:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Results per page (1-100, default 50).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the preceding page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectList"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}": {
+      "get": {
+        "operationId": "getProject",
+        "summary": "Get a Project",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the project:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/work-items": {
+      "get": {
+        "operationId": "listWorkItems",
+        "summary": "List and filter Work Items",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the work_item:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Results per page (1-100, default 50).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the preceding page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "backlog",
+                  "todo",
+                  "in_progress",
+                  "in_review",
+                  "done"
+                ]
+              }
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "open",
+                "closed"
+              ],
+              "default": "all"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "task",
+                  "bug",
+                  "story",
+                  "feature",
+                  "epic"
+                ]
+              }
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "urgent"
+                ]
+              }
+            }
+          },
+          {
+            "name": "assignee",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "A user UUID, me, or none."
+            }
+          },
+          {
+            "name": "sprint",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "A sprint UUID or none."
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "name": "labelName",
+            "in": "query",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          },
+          {
+            "name": "parent",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topLevel",
+            "in": "query",
+            "description": "Boolean; numeric-string aliases 1 and 0 are also accepted.",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "1",
+                    "0"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "name": "updatedAfter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Work Item summary page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemList"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkItem",
+        "summary": "Create a Work Item",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the work_item:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "New key per logical mutation; reuse only for retries of that same request. Keys expire after 24 hours.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkItemRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created Work Item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "ETag": {
+                "description": "Work Item revision ETag.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Idempotency-Replayed": {
+                "description": "Present and true when a completed create is replayed.",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "409": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/work-items/{workItemKey}": {
+      "get": {
+        "operationId": "getWorkItem",
+        "summary": "Get a complete Work Item",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the work_item:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Work Item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "ETag": {
+                "description": "Current Work Item revision.",
+                "schema": {
+                  "type": "string",
+                  "example": "\"wi-4\""
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateWorkItem",
+        "summary": "Update mutable Work Item fields",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the work_item:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "Exact quoted ETag (for example, \"wi-4\") or * for an explicit last-write-wins update. Weak ETags and comma-separated lists are invalid.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:\\*|\"wi-[1-9][0-9]*\")$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWorkItemRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Work Item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "ETag": {
+                "description": "New Work Item revision.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "409": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "412": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "428": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/work-items/{workItemKey}/transitions": {
+      "get": {
+        "operationId": "listWorkItemTransitions",
+        "summary": "Discover available Work Item transitions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the work_item:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Available transitions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemTransitionList"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "transitionWorkItem",
+        "summary": "Transition a Work Item",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the work_item:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "Exact quoted ETag (for example, \"wi-4\") or * for an explicit last-write-wins update. Weak ETags and comma-separated lists are invalid.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:\\*|\"wi-[1-9][0-9]*\")$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "New key per logical mutation; reuse only for retries of that same request. Keys expire after 24 hours.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transitioned Work Item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "ETag": {
+                "description": "New Work Item revision.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "409": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "412": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "428": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/work-items/{workItemKey}/comments": {
+      "get": {
+        "operationId": "listWorkItemComments",
+        "summary": "List Work Item comments",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the comment:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Results per page (1-200, default 50).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the preceding page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Flat comment page ordered oldest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentList"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkItemComment",
+        "summary": "Create a Work Item comment or reply",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the comment:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "New key per logical mutation; reuse only for retries of that same request. Keys expire after 24 hours.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCommentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created Comment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comment"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "409": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Hamstik PAT",
+        "description": "Personal Access Token sent in the Authorization header."
+      }
+    },
+    "headers": {
+      "X-Request-Id": {
+        "description": "Server-generated request correlation identifier.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "responses": {
+      "PublicError": {
+        "description": "Structured Public API error.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PublicErrorEnvelope"
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "description": "Server-generated request correlation identifier.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "PublicError": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "AUTH_REQUIRED",
+              "INVALID_TOKEN",
+              "INSUFFICIENT_SCOPE",
+              "FORBIDDEN",
+              "NOT_FOUND",
+              "METHOD_NOT_ALLOWED",
+              "ORGANIZATION_SUSPENDED",
+              "VALIDATION_ERROR",
+              "INVALID_CURSOR",
+              "CONFLICT",
+              "PRECONDITION_REQUIRED",
+              "REVISION_CONFLICT",
+              "IDEMPOTENCY_KEY_REQUIRED",
+              "IDEMPOTENCY_KEY_REUSED",
+              "IDEMPOTENCY_REQUEST_IN_PROGRESS",
+              "WORK_ITEM_STATUS_REQUIRES_TRANSITION",
+              "INVALID_STATUS_TRANSITION",
+              "RATE_LIMITED",
+              "PAYLOAD_TOO_LARGE",
+              "INTERNAL_ERROR"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "fieldErrors": {
+            "$ref": "#/components/schemas/FieldErrors"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "FieldErrors": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "error",
+          "requestId"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/PublicError"
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "AuthenticationContext": {
+        "type": "object",
+        "required": [
+          "type",
+          "credentialId",
+          "credentialName",
+          "scopes",
+          "expiresAt"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "pat"
+            ]
+          },
+          "credentialId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "credentialName": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OrganizationSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "Me": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "email",
+          "authentication",
+          "defaultOrganization"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "authentication": {
+            "$ref": "#/components/schemas/AuthenticationContext"
+          },
+          "defaultOrganization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrganizationSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Organization": {
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "description",
+          "plan",
+          "role",
+          "isDefault",
+          "suspended",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          },
+          "isDefault": {
+            "type": "boolean"
+          },
+          "suspended": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OrganizationListItem": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Organization"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "slug",
+              "name",
+              "suspended"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "slug": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "suspended": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      },
+      "OrganizationList": {
+        "type": "object",
+        "required": [
+          "items",
+          "page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrganizationListItem"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "required": [
+          "id",
+          "organizationId",
+          "key",
+          "name",
+          "description",
+          "color",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organizationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "color": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProjectList": {
+        "type": "object",
+        "required": [
+          "items",
+          "page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "UserSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "SprintSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "Label": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "color"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkItemSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "title",
+          "type",
+          "status",
+          "priority",
+          "assignee",
+          "sprint",
+          "parentId",
+          "storyPoints",
+          "dueDate",
+          "updatedAt",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "task",
+              "bug",
+              "story",
+              "feature",
+              "epic"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "backlog",
+              "todo",
+              "in_progress",
+              "in_review",
+              "done"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "urgent"
+            ]
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sprint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SprintSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "storyPoints": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "dueDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "WorkItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "projectId",
+          "title",
+          "description",
+          "type",
+          "status",
+          "priority",
+          "assignee",
+          "reporter",
+          "sprint",
+          "parent",
+          "labels",
+          "storyPoints",
+          "dueDate",
+          "createdAt",
+          "updatedAt",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "task",
+              "bug",
+              "story",
+              "feature",
+              "epic"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "backlog",
+              "todo",
+              "in_progress",
+              "in_review",
+              "done"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "urgent"
+            ]
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reporter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sprint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SprintSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "id",
+                  "key",
+                  "title",
+                  "type",
+                  "status",
+                  "priority"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "key": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Label"
+            }
+          },
+          "storyPoints": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "dueDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "WorkItemList": {
+        "type": "object",
+        "required": [
+          "items",
+          "page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkItemSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "WorkItemTransition": {
+        "type": "object",
+        "required": [
+          "targetStatus"
+        ],
+        "properties": {
+          "targetStatus": {
+            "type": "string",
+            "enum": [
+              "backlog",
+              "todo",
+              "in_progress",
+              "in_review",
+              "done"
+            ]
+          }
+        }
+      },
+      "WorkItemTransitionList": {
+        "type": "object",
+        "required": [
+          "currentStatus",
+          "transitions"
+        ],
+        "properties": {
+          "currentStatus": {
+            "type": "string"
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkItemTransition"
+            }
+          }
+        }
+      },
+      "Comment": {
+        "type": "object",
+        "required": [
+          "id",
+          "workItemId",
+          "parentCommentId",
+          "author",
+          "body",
+          "deleted",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workItemId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parentCommentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "author": {
+            "$ref": "#/components/schemas/UserSummary"
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CommentList": {
+        "type": "object",
+        "required": [
+          "items",
+          "page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Comment"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "Page": {
+        "type": "object",
+        "required": [
+          "limit",
+          "hasMore",
+          "nextCursor"
+        ],
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CreateWorkItemRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "task",
+              "bug",
+              "story",
+              "feature",
+              "epic"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "backlog",
+              "todo",
+              "in_progress",
+              "in_review",
+              "done"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "urgent"
+            ]
+          },
+          "assigneeId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sprintId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "storyPoints": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dueDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "UpdateWorkItemRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "task",
+              "bug",
+              "story",
+              "feature",
+              "epic"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "urgent"
+            ]
+          },
+          "assigneeId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sprintId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "storyPoints": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dueDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "TransitionRequest": {
+        "type": "object",
+        "properties": {
+          "targetStatus": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          }
+        },
+        "required": [
+          "targetStatus"
+        ],
+        "additionalProperties": false
+      },
+      "CreateCommentRequest": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "parentCommentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
