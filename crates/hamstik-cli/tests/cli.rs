@@ -1636,3 +1636,142 @@ async fn auth_status_json_reports_public_id_and_memberships() {
     assert_eq!(body["user"]["publicId"], "usr_cPbfeqnghA-RLpDVOMQhHg");
     assert_eq!(body["user"]["organizations"][0]["username"], "steven");
 }
+
+// ---- Color swatch rendering (human tables, ANSI-aware alignment) -----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_list_plain_when_piped() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
+            {"id": "p1", "key": "P01", "name": "Project 01", "color": "#6366f1",
+             "description": null, "organizationId": "o1",
+             "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}
+        ]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    // Piped stdout => color disabled => the swatch still reserves its width
+    // (frame + blocks) and the hex stays plain.
+    let output = base(&server, &dir)
+        .args(["--org", "acme", "project", "list"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "piped output must be ANSI-free: {stdout}"
+    );
+    assert!(stdout.contains("[██] #6366f1"), "{stdout}");
+    // Column alignment: the swatch cell pads correctly (NAME column aligned).
+    assert!(stdout.contains("Project 01"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_list_swatch_with_forced_truecolor() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
+            {"id": "p1", "key": "P01", "name": "Project 01", "color": "#6366f1",
+             "description": null, "organizationId": "o1",
+             "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"},
+            {"id": "p2", "key": "PK2", "name": "Project 2", "color": "#000000",
+             "description": null, "organizationId": "o1",
+             "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}
+        ]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args(["--org", "acme", "project", "list"])
+        .env("CLICOLOR_FORCE", "1")
+        .env("COLORTERM", "truecolor")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // Block glyphs are drawn in the foreground, so the swatch sets foreground
+    // (38;2) AND background (48;2) to the exact RGB — glyphs in the project
+    // color, background matching to seal font seams.
+    assert!(
+        stdout.contains("\u{1b}[38;2;99;102;241;48;2;99;102;241m"),
+        "{stdout}"
+    );
+    // Black project: black-on-black swatch, but the bracket frame remains visible.
+    assert!(stdout.contains("\u{1b}[38;2;0;0;0;48;2;0;0;0m"), "{stdout}");
+    // The hex text is always plain (reset before the text).
+    assert!(stdout.contains("#6366f1"), "{stdout}");
+    assert!(stdout.contains("#000000"), "{stdout}");
+    // Alignment must hold: the NAME column starts at the same byte offset in
+    // every data row even though swatch cells contain escape sequences.
+    let indigo_line = stdout.lines().find(|l| l.contains("P01")).unwrap();
+    let black_line = stdout.lines().find(|l| l.contains("PK2")).unwrap();
+    assert_eq!(
+        indigo_line.find("Project"),
+        black_line.find("Project"),
+        "NAME column must align across rows with colored swatches"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_view_shows_swatch_in_detail() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/P01"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(project_json("P01")))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args(["--org", "acme", "project", "view", "P01"])
+        .env("CLICOLOR_FORCE", "1")
+        .env("COLORTERM", "truecolor")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(stdout.contains("color"));
+    // project_json uses #000000: glyphs painted black on black, visible frame,
+    // plain hex.
+    assert!(
+        stdout.contains("\u{1b}[38;2;0;0;0;48;2;0;0;0m██\u{1b}[0m"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("#000000"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_list_json_has_no_swatch_ansi() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
+            {"id": "p1", "key": "P01", "name": "Project 01", "color": "#6366f1",
+             "description": null, "organizationId": "o1",
+             "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}
+        ]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args(["--org", "acme", "project", "list", "--json"])
+        .env("CLICOLOR_FORCE", "1")
+        .env("COLORTERM", "truecolor")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "--json must be ANSI-free: {stdout}"
+    );
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["items"][0]["color"], "#6366f1");
+}

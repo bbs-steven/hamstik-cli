@@ -195,9 +195,10 @@ cargo run -p hamstik-cli -- --help
 .github/       CI workflows and repository governance
 assets/        README, social-preview, and mascot artwork
 crates/        Rust workspace (hamstik-cli, hamstik-api-client)
-design/        Product requirements and technical specification
+design/        Product requirements, technical specification, versioning policy
 openapi/       Frozen Hamstik Public API v1 OpenAPI snapshot
 skills/        Hamstik Agent Skill materials
+CHANGELOG.md   Release notes (Keep a Changelog format)
 ```
 
 ## API contract
@@ -232,6 +233,11 @@ The detailed product and technical direction lives in:
 
 - [design/PRD.md](design/PRD.md) — product requirements
 - [design/SPEC.md](design/SPEC.md) — technical specification
+- [design/VERSIONING.md](design/VERSIONING.md) — semantic-versioning policy
+  (how MAJOR/MINOR/PATCH are chosen)
+
+Notable changes are tracked in [CHANGELOG.md](CHANGELOG.md) following the
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
 These documents are authoritative for the CLI's architecture and command
 surface. This README intentionally stays higher level.

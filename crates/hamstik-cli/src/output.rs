@@ -123,18 +123,20 @@ impl Output {
 
 /// Renders a left-aligned, width-padded text table.
 ///
-/// Column widths are derived from the widest cell (in chars). Empty input
-/// produces an empty string so callers can suppress the whole table.
+/// Column widths are derived from the widest cell by *visible* width, so cells
+/// may contain ANSI SGR sequences (e.g. color swatches) without breaking
+/// alignment. Empty input produces an empty string so callers can suppress the
+/// whole table.
 #[must_use]
 pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     if headers.is_empty() {
         return String::new();
     }
     let columns = headers.len();
-    let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
+    let mut widths: Vec<usize> = headers.iter().map(|h| visible_width(h)).collect();
     for row in rows {
         for (index, cell) in row.iter().enumerate().take(columns) {
-            widths[index] = widths[index].max(cell.chars().count());
+            widths[index] = widths[index].max(visible_width(cell));
         }
     }
 
@@ -152,13 +154,39 @@ pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     out
 }
 
+/// The number of display columns a cell occupies, skipping ANSI SGR escapes.
+///
+/// Block-element swatch fills (U+2588) render as one terminal column each in
+/// every terminal the CLI targets, so a plain `char` count outside escape
+/// sequences is the width.
+#[must_use]
+pub fn visible_width(text: &str) -> usize {
+    let mut count = 0;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // Skip an entire CSI sequence (ESC [ ... final byte).
+            if chars.next() == Some('[') {
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            count += 1;
+        }
+    }
+    count
+}
+
 fn write_row(out: &mut String, cells: &[&str], widths: &[usize]) {
     let mut line = String::new();
     let last = cells.len().saturating_sub(1);
     for (index, cell) in cells.iter().enumerate() {
         line.push_str(cell);
         if index != last {
-            let pad = widths[index].saturating_sub(cell.chars().count()) + 2;
+            let pad = widths[index].saturating_sub(visible_width(cell)) + 2;
             line.push_str(&" ".repeat(pad));
         }
     }

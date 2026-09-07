@@ -80,7 +80,11 @@ async fn list(
         })
         .await
         .map_err(CliError::from_client)?;
-        let rows: Vec<Vec<String>> = page.items.iter().map(label_row).collect();
+        let rows: Vec<Vec<String>> = page
+            .items
+            .iter()
+            .map(|label| label_row(session, label))
+            .collect();
         let json_value = serde_json::json!({ "items": page.raw_items, "page": page.page });
         emit_table(session, &json_value, &["ID", "NAME", "COLOR"], &rows)
     } else {
@@ -95,13 +99,23 @@ async fn list(
             )
             .await
             .map_err(CliError::from_client)?;
-        let rows: Vec<Vec<String>> = response.value.items.iter().map(label_row).collect();
+        let rows: Vec<Vec<String>> = response
+            .value
+            .items
+            .iter()
+            .map(|label| label_row(session, label))
+            .collect();
         emit_table(session, &response.raw, &["ID", "NAME", "COLOR"], &rows)
     }
 }
 
-fn label_row(label: &ProjectLabel) -> Vec<String> {
-    vec![label.id.clone(), label.name.clone(), label.color.clone()]
+/// One label row: the color cell carries a swatch in the label's color.
+fn label_row(session: &Session<'_>, label: &ProjectLabel) -> Vec<String> {
+    vec![
+        label.id.clone(),
+        label.name.clone(),
+        super::project::color_detail(session, &label.color),
+    ]
 }
 
 async fn create(
@@ -153,7 +167,12 @@ async fn create(
     emit_view(session, &response.raw, &label.id.clone(), |session| {
         session
             .out
-            .line(&format!("{}  {}  {}", label.id, label.name, label.color))
+            .line(&format!(
+                "{}  {}  {}",
+                label.id,
+                label.name,
+                super::project::color_detail(session, &label.color)
+            ))
             .map_err(CliError::general)
     })
 }

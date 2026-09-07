@@ -94,8 +94,16 @@ decision documented in the design files.
 User-visible CLI changes require corresponding documentation changes. Canonical
 end-user CLI documentation ultimately lives in the main Hamstik application
 documentation repository/tree. This repository owns implementation/developer
-documentation and the future Agent Skill. Include documentation updates in the same
-change when behavior changes.
+documentation and the future Agent Skill. Include documentation updates in the
+same change when behavior changes.
+
+## Changelog and versioning
+
+Every user-visible change gets an entry in [CHANGELOG.md](CHANGELOG.md) under
+`## [Unreleased]` at merge time, and version bumps follow
+[design/VERSIONING.md](design/VERSIONING.md). Breaking changes to documented
+surfaces (commands, flags, JSON output, exit codes) are called out in a
+`### Breaking` subsection.
 
 ## Agent Skill
 

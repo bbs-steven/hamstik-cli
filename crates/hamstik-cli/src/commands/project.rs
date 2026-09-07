@@ -39,6 +39,8 @@ async fn list(session: &mut Session<'_>, pagination: &PaginationArgs) -> Result<
         )
         .await
         .map_err(CliError::from_client)?;
+    let color = session.color_enabled();
+    let truecolor = session.truecolor_enabled();
     let rows: Vec<Vec<String>> = response
         .value
         .items
@@ -47,11 +49,20 @@ async fn list(session: &mut Session<'_>, pagination: &PaginationArgs) -> Result<
             vec![
                 project.key.clone(),
                 project.name.clone(),
-                project.color.clone(),
+                crate::palette::color_cell(color, &project.color, truecolor),
             ]
         })
         .collect();
     emit_table(session, &response.raw, &["KEY", "NAME", "COLOR"], &rows)
+}
+
+/// Renders the color value for detail views: a swatch in the actual color
+/// followed by the plain hex text (human mode only; view closures are not
+/// called for `--json`/`--quiet`).
+pub(crate) fn color_detail(session: &Session<'_>, color: &str) -> String {
+    let enabled = session.color_enabled();
+    let truecolor = session.truecolor_enabled();
+    crate::palette::color_cell(enabled, color, truecolor)
 }
 
 async fn view(session: &mut Session<'_>, key: &str) -> Result<(), CliError> {
@@ -67,7 +78,7 @@ async fn view(session: &mut Session<'_>, key: &str) -> Result<(), CliError> {
         let lines = [
             ("name", project.name.clone()),
             ("key", project.key.clone()),
-            ("color", project.color.clone()),
+            ("color", color_detail(session, &project.color)),
             (
                 "description",
                 project.description.clone().unwrap_or_default(),
@@ -136,7 +147,7 @@ async fn create(
         let lines = [
             ("name", project.name.clone()),
             ("key", project.key.clone()),
-            ("color", project.color.clone()),
+            ("color", color_detail(session, &project.color)),
             (
                 "description",
                 project.description.clone().unwrap_or_default(),

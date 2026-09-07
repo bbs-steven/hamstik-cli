@@ -271,6 +271,33 @@ impl Session<'_> {
         !self.global.no_input && self.env.stdin_is_terminal()
     }
 
+    /// Whether ANSI colors may decorate human output this invocation.
+    ///
+    /// Uses the shared [`color_probe`] so `doctor`'s report and every other
+    /// command's decorations agree on the decision.
+    #[must_use]
+    pub fn color_enabled(&self) -> bool {
+        crate::terminal::color_probe(
+            self.env,
+            self.global.no_color,
+            self.env.stdout_is_terminal(),
+        )
+        .ok
+    }
+
+    /// Whether the terminal is likely to understand 24-bit color.
+    ///
+    /// `COLORTERM=truecolor` is the convention; unknown terminals get the
+    /// safer 256-color palette for swatches.
+    #[must_use]
+    pub fn truecolor_enabled(&self) -> bool {
+        self.color_enabled()
+            && matches!(
+                self.env.var("COLORTERM").as_deref(),
+                Some("truecolor") | Some("24bit")
+            )
+    }
+
     /// Whether the JSON success envelope should echo the raw API body.
     #[must_use]
     pub fn json(&self) -> bool {

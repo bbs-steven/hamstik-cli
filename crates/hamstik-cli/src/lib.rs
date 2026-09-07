@@ -18,6 +18,7 @@ pub mod exit;
 pub mod fsutil;
 pub mod input;
 pub mod output;
+pub mod palette;
 pub mod terminal;
 
 pub mod commands;
