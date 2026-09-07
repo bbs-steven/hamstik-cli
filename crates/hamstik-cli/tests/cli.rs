@@ -914,7 +914,7 @@ async fn redirect_is_not_followed_end_to_end() {
 /// A project JSON body for `GET /organizations/{org}/projects/{key}`.
 fn project_json(key: &str) -> Value {
     json!({
-        "id": "p1", "key": key, "name": "P", "color": "#000000",
+        "id": "p1", "key": key, "name": "P", "color": "#000000", "revision": 1, "archivedAt": null,
         "description": null, "organizationId": "o1",
         "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
     })
@@ -1648,7 +1648,7 @@ async fn project_list_plain_when_piped() {
     Mock::given(method("GET"))
         .and(path("/api/v1/organizations/acme/projects"))
         .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
-            {"id": "p1", "key": "P01", "name": "Project 01", "color": "#6366f1",
+            {"id": "p1", "key": "P01", "name": "Project 01", "color": "#6366f1", "revision": 1, "archivedAt": null,
              "description": null, "organizationId": "o1",
              "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}
         ]))))
@@ -1679,10 +1679,10 @@ async fn project_list_swatch_with_forced_truecolor() {
     Mock::given(method("GET"))
         .and(path("/api/v1/organizations/acme/projects"))
         .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
-            {"id": "p1", "key": "P01", "name": "Project 01", "color": "#6366f1",
+            {"id": "p1", "key": "P01", "name": "Project 01", "color": "#6366f1", "revision": 1, "archivedAt": null,
              "description": null, "organizationId": "o1",
              "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"},
-            {"id": "p2", "key": "PK2", "name": "Project 2", "color": "#000000",
+            {"id": "p2", "key": "PK2", "name": "Project 2", "color": "#000000", "revision": 1, "archivedAt": null,
              "description": null, "organizationId": "o1",
              "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}
         ]))))
@@ -1755,7 +1755,7 @@ async fn project_list_json_has_no_swatch_ansi() {
     Mock::given(method("GET"))
         .and(path("/api/v1/organizations/acme/projects"))
         .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
-            {"id": "p1", "key": "P01", "name": "Project 01", "color": "#6366f1",
+            {"id": "p1", "key": "P01", "name": "Project 01", "color": "#6366f1", "revision": 1, "archivedAt": null,
              "description": null, "organizationId": "o1",
              "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}
         ]))))
@@ -1777,4 +1777,746 @@ async fn project_list_json_has_no_swatch_ansi() {
     );
     let body: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(body["items"][0]["color"], "#6366f1");
+}
+
+// ---- Updated API surface tests ---------------------------------------------
+
+fn project_with_archived(key: &str, revision: i64, archived_at: Option<&str>) -> Value {
+    json!({
+        "id": "p1", "organizationId": "o1", "key": key, "name": "P", "color": "#000000",
+        "description": null, "revision": revision, "archivedAt": archived_at,
+        "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
+    })
+}
+
+fn me_public_json() -> Value {
+    json!({
+        "id": "u1", "publicId": "usr_cPbfeqnghA-RLpDVOMQhHg", "name": "Steven", "email": "steven@example.com",
+        "authentication": {"type": "pat", "credentialId": "c", "credentialName": "n", "scopes": [], "expiresAt": "2027-01-01T00:00:00Z"},
+        "defaultOrganization": null
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_create_sends_assignee_public_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(work_item_json("todo", 1)))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "create",
+            "--title",
+            "T",
+            "--assignee",
+            "usr_cPbfeqnghA-RLpDVOMQhHg",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let body: Value =
+        serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
+    assert_eq!(body["assigneePublicId"], "usr_cPbfeqnghA-RLpDVOMQhHg");
+    assert!(body.get("assigneeId").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_list_supports_sort_and_archived_filters() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "list",
+            "--sort",
+            "dueDate",
+            "--overdue",
+            "true",
+            "--archived",
+            "false",
+        ])
+        .assert()
+        .success();
+
+    let query = server.received_requests().await.unwrap()[0]
+        .url
+        .query()
+        .unwrap_or_default()
+        .to_string();
+    assert!(query.contains("sort=dueDate"), "{query}");
+    assert!(query.contains("overdue=true"), "{query}");
+    assert!(query.contains("archived=false"), "{query}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_archive_sends_if_match_and_empty_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-4\"")
+                .set_body_json(work_item_json("done", 4)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/archive",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(work_item_json("done", 5)))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "archive",
+            "HAM-1",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let reqs = server.received_requests().await.unwrap();
+    let archive = reqs.iter().find(|r| r.method.as_str() == "POST").unwrap();
+    assert_eq!(
+        archive.headers.get("if-match").unwrap().to_str().unwrap(),
+        "\"wi-4\""
+    );
+    assert!(archive.headers.contains_key("idempotency-key"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_delete_sends_cascade_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-4\"")
+                .set_body_json(work_item_json("done", 4)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1",
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "delete",
+            "HAM-1",
+            "--cascade",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let req = &server.received_requests().await.unwrap()[1];
+    let body: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body["cascade"], true);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_link_add_list_and_delete() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/links"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": "l1", "relation": "blocks",
+            "otherWorkItem": {"id": "2", "key": "HAM-2", "project": {"id": "p", "key": "HAM", "name": "Ham"}, "title": "Other", "type": "task", "status": "todo"},
+            "createdBy": null, "createdAt": "2026-01-01T00:00:00Z"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([{
+            "id": "l1", "relation": "blocks",
+            "otherWorkItem": {"id": "2", "key": "HAM-2", "project": {"id": "p", "key": "HAM", "name": "Ham"}, "title": "Other", "type": "task", "status": "todo"},
+            "createdBy": null, "createdAt": "2026-01-01T00:00:00Z"
+        }]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "link",
+            "add",
+            "HAM-1",
+            "--target-key",
+            "HAM-2",
+            "--relation",
+            "blocks",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "link",
+            "list",
+            "HAM-1",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let reqs = server.received_requests().await.unwrap();
+    let post = reqs.iter().find(|r| r.method.as_str() == "POST").unwrap();
+    let body: Value = serde_json::from_slice(&post.body).unwrap();
+    assert_eq!(body["targetKey"], "HAM-2");
+    assert_eq!(body["relation"], "blocks");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_link_duplicate_maps_to_exit_six() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/links",
+        ))
+        .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+            "error": {"code": "LINK_DUPLICATE", "message": "A link already exists."},
+            "requestId": "r"
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "link",
+            "add",
+            "HAM-1",
+            "--target-key",
+            "HAM-2",
+            "--relation",
+            "blocks",
+        ])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("A link already exists"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_activity_renders_feed() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/activity"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
+            {"id": "a1", "action": "status_changed", "actor": {"publicId": "usr_cPbfeqnghA-RLpDVOMQhHg", "name": "A"},
+             "detail": {"from": "todo", "to": "done"}, "createdAt": "2026-01-02T00:00:00Z"}
+        ]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "activity",
+            "HAM-1",
+            "--json",
+        ])
+        .assert()
+        .success();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_comment_edit_sends_body_and_idempotency() {
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/comments/c1",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "c1", "workItemId": "w1", "parentCommentId": null,
+            "author": {"publicId": "usr_cPbfeqnghA-RLpDVOMQhHg", "name": "A"},
+            "body": "edited", "deleted": false,
+            "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z",
+            "editedAt": "2026-01-02T00:00:00Z"
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "comment",
+            "edit",
+            "HAM-1",
+            "c1",
+            "--body",
+            "edited",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["editedAt"], "2026-01-02T00:00:00Z");
+
+    let req = &server.received_requests().await.unwrap()[0];
+    assert!(req.headers.contains_key("idempotency-key"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_bulk_create_sends_operations() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/bulk-work-items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"index": 0, "status": 201, "workItem": {"id": "1", "key": "HAM-1"}}]
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let ops_path = dir.path().join("ops.json");
+    std::fs::write(&ops_path, r#"[{"projectKey":"HAM","title":"First"}]"#).unwrap();
+    let output = base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "work",
+            "bulk",
+            "create",
+            "--operations-file",
+            ops_path.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["results"][0]["workItem"]["key"], "HAM-1");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_bulk_rejects_too_many_operations_locally() {
+    let server = MockServer::start().await;
+    let dir = TempDir::new().unwrap();
+    let ops_path = dir.path().join("ops.json");
+    let ops: Vec<Value> = (0..51)
+        .map(|i| json!({"projectKey": "HAM", "title": format!("Item {i}")}))
+        .collect();
+    std::fs::write(&ops_path, serde_json::to_string(&ops).unwrap()).unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "work",
+            "bulk",
+            "create",
+            "--operations-file",
+            ops_path.to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("between 1 and 50"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_edit_sends_if_match_and_idempotency() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/WEB"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"project-1\"")
+                .set_body_json(project_with_archived("WEB", 1, None)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/api/v1/organizations/acme/projects/WEB"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"project-2\"")
+                .set_body_json(project_with_archived("WEB", 2, None)),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org", "acme", "project", "edit", "WEB", "--name", "New name", "--json",
+        ])
+        .assert()
+        .success();
+
+    let reqs = server.received_requests().await.unwrap();
+    let patch = reqs.iter().find(|r| r.method.as_str() == "PATCH").unwrap();
+    assert_eq!(
+        patch.headers.get("if-match").unwrap().to_str().unwrap(),
+        "\"project-1\""
+    );
+    assert!(patch.headers.contains_key("idempotency-key"));
+    let body: Value = serde_json::from_slice(&patch.body).unwrap();
+    assert_eq!(body["name"], "New name");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_archive_and_unarchive_flow() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/WEB"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"project-1\"")
+                .set_body_json(project_with_archived("WEB", 1, None)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects/WEB/archive"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(project_with_archived(
+                "WEB",
+                2,
+                Some("2026-04-01T00:00:00Z"),
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org", "acme", "project", "archive", "WEB", "--force", "--json",
+        ])
+        .assert()
+        .success();
+
+    // --force skips the preflight GET, so the archive POST is the only request.
+    let req = &server.received_requests().await.unwrap()[0];
+    let body: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body, json!({}));
+    assert_eq!(req.headers.get("if-match").unwrap().to_str().unwrap(), "*");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_activity_renders_feed() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/activity"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
+            {"id": "a1", "action": "created", "actor": null, "detail": null,
+             "createdAt": "2026-01-02T00:00:00Z",
+             "workItem": {"id": "1", "key": "HAM-1", "title": "T"}}
+        ]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "project",
+            "activity",
+            "--json",
+        ])
+        .assert()
+        .success();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_list_archived_flag_filters() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["--org", "acme", "project", "list", "--archived", "true"])
+        .assert()
+        .success();
+
+    let query = server.received_requests().await.unwrap()[0]
+        .url
+        .query()
+        .unwrap_or_default()
+        .to_string();
+    assert!(query.contains("archived=true"), "{query}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn org_members_renders_directory() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
+            {"publicId": "usr_cPbfeqnghA-RLpDVOMQhHg", "name": "Steven", "username": "steven"}
+        ]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args(["org", "members", "acme", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["items"][0]["publicId"], "usr_cPbfeqnghA-RLpDVOMQhHg");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn org_work_lists_context_items() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/work-items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
+            {"id": "1", "key": "HAM-1", "revision": 1, "title": "T", "status": "todo",
+             "assignee": {"publicId": "usr_cPbfeqnghA-RLpDVOMQhHg", "name": "A"},
+             "project": {"id": "p", "key": "HAM", "name": "Ham", "color": "#000000"},
+             "organization": {"id": "o", "slug": "acme", "name": "Acme"}}
+        ]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["--org", "acme", "org", "work", "--project", "HAM", "--json"])
+        .assert()
+        .success();
+
+    let query = server.received_requests().await.unwrap()[0]
+        .url
+        .query()
+        .unwrap_or_default()
+        .to_string();
+    assert!(query.contains("project=HAM"), "{query}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn org_work_mine_sends_assignee_me() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/work-items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["--org", "acme", "org", "work", "--mine", "--json"])
+        .assert()
+        .success();
+
+    let query = server.received_requests().await.unwrap()[0]
+        .url
+        .query()
+        .unwrap_or_default()
+        .to_string();
+    assert!(query.contains("assignee=me"), "{query}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_list_mine_sends_assignee_me() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "list",
+            "--mine",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let query = server.received_requests().await.unwrap()[0]
+        .url
+        .query()
+        .unwrap_or_default()
+        .to_string();
+    assert!(query.contains("assignee=me"), "{query}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_view_shows_profile_summary() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users/usr_cPbfeqnghA-RLpDVOMQhHg"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "publicId": "usr_cPbfeqnghA-RLpDVOMQhHg", "name": "Steven",
+            "avatarUrl": null, "joinedAt": "2026-01-15T14:30:00.000Z",
+            "isCurrentUser": true, "sharedOrganizations": [],
+            "stats": {"projects": 1, "workItemsAssigned": 2, "workItemsCreated": 3, "workItemsCompleted": 4, "comments": 5}
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args(["user", "view", "usr_cPbfeqnghA-RLpDVOMQhHg", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["publicId"], "usr_cPbfeqnghA-RLpDVOMQhHg");
+    assert_eq!(body["stats"]["workItemsCompleted"], 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_work_lists_context_items() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users/usr_cPbfeqnghA-RLpDVOMQhHg/work"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "user",
+            "work",
+            "usr_cPbfeqnghA-RLpDVOMQhHg",
+            "--involvement",
+            "assigned",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let query = server.received_requests().await.unwrap()[0]
+        .url
+        .query()
+        .unwrap_or_default()
+        .to_string();
+    assert!(query.contains("involvement=assigned"), "{query}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_avatar_downloads_bytes() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users/usr_cPbfeqnghA-RLpDVOMQhHg/avatar"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Content-Type", "image/png")
+                .set_body_bytes(vec![1, 2, 3]),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output_path = dir.path().join("avatar.png");
+    base(&server, &dir)
+        .args([
+            "user",
+            "avatar",
+            "usr_cPbfeqnghA-RLpDVOMQhHg",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success();
+    assert_eq!(std::fs::read(&output_path).unwrap(), vec![1, 2, 3]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_status_reports_public_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(me_public_json()))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args(["auth", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["user"]["publicId"], "usr_cPbfeqnghA-RLpDVOMQhHg");
 }

@@ -7,8 +7,14 @@
 //! (RFC 3339) to remain resilient to additive server changes and to avoid
 //! coupling the CLI to a date/time crate. Known enum values are validated on the
 //! request side (CLI); responses are stored verbatim.
+//!
+//! User summaries arrive in two v1-compatible shapes — the legacy `{id, name}`
+//! projection used by original Work Item/comment/attachment surfaces and the
+//! `{publicId, name}` projection used by newer mutation responses — so they are
+//! decoded into one tolerant [`UserSummary`] enum.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::pagination::Page;
 
@@ -21,7 +27,44 @@ pub struct ListOptions {
     pub cursor: Option<String>,
 }
 
-/// Filters accepted by `GET .../work-items`.
+/// Query options for `GET .../projects` (which also filters by archive state).
+#[derive(Debug, Clone, Default)]
+pub struct ListProjectsOptions {
+    /// Maximum items per page (server-capped).
+    pub limit: Option<u32>,
+    /// Opaque continuation cursor from a previous page's `nextCursor`.
+    pub cursor: Option<String>,
+    /// When true, list only archived Projects (default: only unarchived).
+    pub archived: Option<bool>,
+}
+
+/// Query options for the Organization member directory.
+#[derive(Debug, Clone, Default)]
+pub struct ListOrganizationUsersOptions {
+    /// Maximum items per page (server-capped).
+    pub limit: Option<u32>,
+    /// Opaque continuation cursor from a previous page's `nextCursor`.
+    pub cursor: Option<String>,
+    /// Literal substring filter over member name or Organization username.
+    pub q: Option<String>,
+}
+
+/// Query options for the activity feeds (`since` is strictly-after).
+#[derive(Debug, Clone, Default)]
+pub struct ActivityOptions {
+    /// Maximum items per page (server-capped).
+    pub limit: Option<u32>,
+    /// Opaque continuation cursor from a previous page's `nextCursor`.
+    pub cursor: Option<String>,
+    /// Only events strictly after this RFC 3339 timestamp.
+    pub since: Option<String>,
+}
+
+/// Filters accepted by the Work Item collections (`.../work-items`,
+/// `/organizations/{slug}/work-items`, `/my/work`, and profile Work).
+///
+/// Every field is optional; each endpoint validates the subset it accepts, so
+/// callers must only set the fields allowed for the target collection.
 #[derive(Debug, Clone, Default)]
 pub struct ListWorkItemsQuery {
     /// Maximum items per page (server-capped).
@@ -32,7 +75,7 @@ pub struct ListWorkItemsQuery {
     pub q: Option<String>,
     /// Filter by status; multiple values are OR-ed.
     pub status: Vec<String>,
-    /// Hierarchy scope of the result set (server-defined, e.g. `all`).
+    /// Hierarchy scope of the result set (`all`, `open`, or `closed`).
     pub scope: Option<String>,
     /// Filter by work item type; multiple values are OR-ed.
     pub item_type: Vec<String>,
@@ -40,32 +83,52 @@ pub struct ListWorkItemsQuery {
     pub priority: Vec<String>,
     /// Filter by assignee user id (`me` is accepted by the server).
     pub assignee: Option<String>,
-    /// Filter by sprint id.
+    /// Filter by sprint id (or `none`).
     pub sprint: Option<String>,
     /// Filter by label id; multiple values are OR-ed.
     pub label: Vec<String>,
     /// Filter by label name; multiple values are OR-ed.
     pub label_name: Vec<String>,
-    /// Only items with this parent id.
+    /// Only items with this parent work item key.
     pub parent: Option<String>,
     /// Only items without a parent (top-level).
     pub top_level: Option<bool>,
     /// Only items updated after this RFC 3339 timestamp.
     pub updated_after: Option<String>,
+    /// Filter by Project key (Organization/My Work/profile collections).
+    pub projects: Vec<String>,
+    /// Filter by Organization slug (profile Work only).
+    pub organizations: Vec<String>,
+    /// Restrict to involvement kind: `assigned`, `created`, or `commented`
+    /// (profile Work only).
+    pub involvement: Vec<String>,
+    /// Only items past their due date.
+    pub overdue: Option<bool>,
+    /// Only items due strictly before this RFC 3339 timestamp.
+    pub due_before: Option<String>,
+    /// Only items due strictly after this RFC 3339 timestamp.
+    pub due_after: Option<String>,
+    /// Result ordering: `updated`, `dueDate`, `priority`, or `rank`.
+    pub sort: Option<String>,
+    /// Include archived (true) or only unarchived (false) items.
+    pub archived: Option<bool>,
+    /// Sparse fieldset: comma-separated summary field names; an empty value
+    /// selects the complete summary.
+    pub fields: Option<String>,
 }
 
 /// The authenticated user's identity, from `GET /me`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Me {
-    /// The user's id.
+    /// The user's legacy internal id (retained for v1 compatibility).
     pub id: String,
     /// The user's immutable public identifier (e.g. `usr_...`).
     #[serde(default)]
     pub public_id: Option<String>,
     /// The user's display name.
     pub name: String,
-    /// The user's email address.
+    /// The user's email address (private; only in the caller's own `/me`).
     pub email: String,
     /// How the request was authenticated.
     pub authentication: AuthenticationContext,
@@ -193,6 +256,79 @@ pub struct OrganizationList {
     pub page: Page,
 }
 
+/// An active member row from the Organization member directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationUser {
+    /// The member's immutable public identifier (`usr_...`).
+    pub public_id: String,
+    /// The member's display name.
+    pub name: String,
+    /// The member's username inside this Organization, when one is set.
+    #[serde(default)]
+    pub username: Option<String>,
+}
+
+/// A paginated Organization member directory page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrganizationUserList {
+    /// One page of member rows.
+    pub items: Vec<OrganizationUser>,
+    /// Pagination metadata.
+    pub page: Page,
+}
+
+/// An authenticated profile summary (`GET /users/{publicId}`).
+///
+/// Never contains an email address, an internal UUID, or hidden work data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserProfile {
+    /// The profile's immutable public identifier.
+    pub public_id: String,
+    /// The user's display name.
+    pub name: String,
+    /// Canonical avatar URL, when an avatar exists.
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+    /// When the account joined (RFC 3339).
+    pub joined_at: String,
+    /// Whether the profile belongs to the authenticated caller.
+    pub is_current_user: bool,
+    /// Shared Organizations visible to the viewer, with the target's
+    /// Organization-paired usernames.
+    pub shared_organizations: Vec<ProfileOrganization>,
+    /// Visibility-scoped activity statistics.
+    pub stats: ProfileStats,
+}
+
+/// One Organization-paired username on a profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileOrganization {
+    /// The Organization the username belongs to.
+    pub organization: OrganizationSummary,
+    /// The target user's username inside that Organization, when set.
+    #[serde(default)]
+    pub username: Option<String>,
+}
+
+/// The five visibility-scoped statistics on a profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileStats {
+    /// Distinct visible Projects involving the target.
+    pub projects: i64,
+    /// Visible Work Items currently assigned to the target.
+    pub work_items_assigned: i64,
+    /// Visible Work Items reported by the target.
+    pub work_items_created: i64,
+    /// Visible assigned Work Items in the canonical done status.
+    pub work_items_completed: i64,
+    /// Visible non-deleted comments authored by the target.
+    pub comments: i64,
+}
+
 /// A project resource.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -209,6 +345,11 @@ pub struct Project {
     pub description: Option<String>,
     /// Display color as a hex string.
     pub color: String,
+    /// Optimistic-concurrency revision (matches the `project-N` `ETag`).
+    pub revision: i64,
+    /// When the Project was archived; null while unarchived.
+    #[serde(default)]
+    pub archived_at: Option<String>,
     /// Creation timestamp (RFC 3339).
     pub created_at: String,
     /// Last-update timestamp (RFC 3339).
@@ -225,12 +366,55 @@ pub struct ProjectList {
 }
 
 /// A compact user reference.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserSummary {
-    /// The user's id.
-    pub id: String,
-    /// The user's display name.
-    pub name: String,
+///
+/// The legacy v1 shape is `{id, name}`; newer projections use
+/// `{publicId, name}`. Both decode into this enum.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum UserSummary {
+    /// Legacy v1 summary: `{id, name}`.
+    Legacy {
+        /// The user's legacy internal id.
+        id: String,
+        /// The user's display name.
+        name: String,
+    },
+    /// Public summary: `{publicId, name}`.
+    Public {
+        /// The user's immutable public id (`usr_...`).
+        #[serde(rename = "publicId")]
+        public_id: String,
+        /// The user's display name.
+        name: String,
+    },
+}
+
+impl UserSummary {
+    /// The user's display name regardless of projection shape.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Legacy { name, .. } | Self::Public { name, .. } => name,
+        }
+    }
+
+    /// The immutable public id, when the projection carries one.
+    #[must_use]
+    pub fn public_id(&self) -> Option<&str> {
+        match self {
+            Self::Public { public_id, .. } => Some(public_id),
+            Self::Legacy { .. } => None,
+        }
+    }
+
+    /// The legacy internal id, when the projection carries one.
+    #[must_use]
+    pub fn legacy_id(&self) -> Option<&str> {
+        match self {
+            Self::Legacy { id, .. } => Some(id),
+            Self::Public { .. } => None,
+        }
+    }
 }
 
 /// A compact sprint reference.
@@ -335,6 +519,9 @@ pub struct ProjectLabelList {
 }
 
 /// A work item in list responses (summary shape).
+///
+/// Only `id`, `key`, and `revision` are guaranteed when the caller supplies a
+/// sparse `fields=` fieldset, so every other summary field is optional.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkItemSummary {
@@ -342,29 +529,80 @@ pub struct WorkItemSummary {
     pub id: String,
     /// The work item's human key (e.g. `HAM-1`).
     pub key: String,
-    /// The work item's title.
-    pub title: String,
-    /// The work item type (e.g. `task`).
-    #[serde(rename = "type")]
-    pub item_type: String,
-    /// The current status.
-    pub status: String,
-    /// The current priority.
-    pub priority: String,
-    /// The assignee, when assigned.
-    pub assignee: Option<UserSummary>,
-    /// The sprint, when scheduled.
-    pub sprint: Option<SprintSummary>,
-    /// The parent work item id, when nested.
-    pub parent_id: Option<String>,
-    /// Story points, when estimated.
-    pub story_points: Option<i64>,
-    /// Due date (RFC 3339), when set.
-    pub due_date: Option<String>,
-    /// Last-update timestamp (RFC 3339).
-    pub updated_at: String,
     /// Optimistic-concurrency revision.
     pub revision: i64,
+    /// The work item's title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// The work item type (e.g. `task`).
+    #[serde(default, rename = "type")]
+    pub item_type: Option<String>,
+    /// The current status.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// The current priority.
+    #[serde(default)]
+    pub priority: Option<String>,
+    /// The assignee, when assigned.
+    #[serde(default)]
+    pub assignee: Option<UserSummary>,
+    /// The sprint, when scheduled.
+    #[serde(default)]
+    pub sprint: Option<SprintSummary>,
+    /// The parent work item id, when nested.
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    /// Story points, when estimated.
+    #[serde(default)]
+    pub story_points: Option<i64>,
+    /// Due date (RFC 3339), when set.
+    #[serde(default)]
+    pub due_date: Option<String>,
+    /// When the item was archived; null while unarchived.
+    #[serde(default)]
+    pub archived_at: Option<String>,
+    /// Creation timestamp (RFC 3339), when included.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    /// Last-update timestamp (RFC 3339), when included.
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// A Work Item collection item carrying its Organization and Project context
+/// (Organization Work, My Work, and profile Work collections).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemContextSummary {
+    /// The summary fields.
+    #[serde(flatten)]
+    pub summary: WorkItemSummary,
+    /// The Project the item belongs to.
+    pub project: ProjectContext,
+    /// The Organization the Project belongs to.
+    pub organization: OrganizationSummary,
+}
+
+/// The Project context attached to context-collection rows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectContext {
+    /// The project's id.
+    pub id: String,
+    /// The project's short key.
+    pub key: String,
+    /// The project's display name.
+    pub name: String,
+    /// Display color as a hex string.
+    pub color: String,
+}
+
+/// An Organization, My Work, or profile Work Item page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkItemContextList {
+    /// One page of context summaries.
+    pub items: Vec<WorkItemContextSummary>,
+    /// Pagination metadata.
+    pub page: Page,
 }
 
 /// The parent reference on a full work item.
@@ -387,6 +625,10 @@ pub struct WorkItemParent {
 }
 
 /// A full work item resource.
+///
+/// Assignee/reporter summaries keep the legacy `{id, name}` shape on v1 read
+/// and update surfaces but arrive as `{publicId, name}` on the archive,
+/// unarchive, and label-assignment mutation responses; both decode here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkItem {
@@ -421,6 +663,9 @@ pub struct WorkItem {
     pub story_points: Option<i64>,
     /// Due date (RFC 3339), when set.
     pub due_date: Option<String>,
+    /// When the item was archived; null while unarchived.
+    #[serde(default)]
+    pub archived_at: Option<String>,
     /// Creation timestamp (RFC 3339).
     pub created_at: String,
     /// Last-update timestamp (RFC 3339).
@@ -457,6 +702,10 @@ pub struct WorkItemTransitionList {
 }
 
 /// A comment resource.
+///
+/// List/create/delete responses retain the legacy `{id, name}` author
+/// summary; the edit response uses the `{publicId, name}` projection. Both
+/// decode into [`UserSummary`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Comment {
@@ -476,6 +725,9 @@ pub struct Comment {
     pub created_at: String,
     /// Last-update timestamp (RFC 3339).
     pub updated_at: String,
+    /// When the comment was last edited; creation and deletion leave it unset.
+    #[serde(default)]
+    pub edited_at: Option<String>,
 }
 
 /// A paginated comment list.
@@ -501,7 +753,7 @@ pub struct Attachment {
     pub content_type: String,
     /// The file size in bytes.
     pub size: i64,
-    /// The creator, when recorded.
+    /// The creator, when recorded (legacy `{id, name}` summary).
     pub created_by: Option<UserSummary>,
     /// Creation timestamp (RFC 3339).
     pub created_at: String,
@@ -512,6 +764,142 @@ pub struct Attachment {
 pub struct AttachmentList {
     /// One page of attachments.
     pub items: Vec<Attachment>,
+    /// Pagination metadata.
+    pub page: Page,
+}
+
+/// A Work Item link entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemLink {
+    /// The link's id.
+    pub id: String,
+    /// The relation as seen from the requested Work Item.
+    pub relation: String,
+    /// The Work Item on the other side of the link.
+    pub other_work_item: LinkOtherWorkItem,
+    /// The link creator, when recorded.
+    pub created_by: Option<UserSummary>,
+    /// Creation timestamp (RFC 3339).
+    pub created_at: String,
+}
+
+/// The other Work Item referenced by a link.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkOtherWorkItem {
+    /// The other work item's id.
+    pub id: String,
+    /// The other work item's human key.
+    pub key: String,
+    /// The other work item's Project summary.
+    pub project: LinkProjectSummary,
+    /// The other work item's title.
+    pub title: String,
+    /// The other work item's type.
+    #[serde(rename = "type")]
+    pub item_type: String,
+    /// The other work item's status.
+    pub status: String,
+}
+
+/// The Project summary attached to a link's other Work Item.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkProjectSummary {
+    /// The project's id.
+    pub id: String,
+    /// The project's short key.
+    pub key: String,
+    /// The project's display name.
+    pub name: String,
+}
+
+/// A paginated Work Item link list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkItemLinkList {
+    /// One page of links.
+    pub items: Vec<WorkItemLink>,
+    /// Pagination metadata.
+    pub page: Page,
+}
+
+/// One redacted activity event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Activity {
+    /// The activity event's id.
+    pub id: String,
+    /// The action kind (e.g. `created`, `status_changed`).
+    pub action: String,
+    /// The acting user, or null when the actor was deleted.
+    pub actor: Option<UserSummary>,
+    /// The action-specific detail projection, or null.
+    #[serde(default)]
+    pub detail: Option<Value>,
+    /// Creation timestamp (RFC 3339).
+    pub created_at: String,
+}
+
+/// A paginated Work Item activity page (oldest first).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityList {
+    /// One page of activity events.
+    pub items: Vec<Activity>,
+    /// Pagination metadata.
+    pub page: Page,
+}
+
+/// The Work Item summary attached to Project/profile activity rows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkItemRefSummary {
+    /// The work item's id.
+    pub id: String,
+    /// The work item's human key.
+    pub key: String,
+    /// The work item's title.
+    pub title: String,
+}
+
+/// A Project activity event (newest first), with its Work Item summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectActivity {
+    /// The activity fields.
+    #[serde(flatten)]
+    pub activity: Activity,
+    /// The Work Item the event happened on.
+    pub work_item: WorkItemRefSummary,
+}
+
+/// A paginated Project activity page (newest first).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectActivityList {
+    /// One page of activity events.
+    pub items: Vec<ProjectActivity>,
+    /// Pagination metadata.
+    pub page: Page,
+}
+
+/// A profile activity event with its authorized context summaries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileActivity {
+    /// The activity fields.
+    #[serde(flatten)]
+    pub activity: Activity,
+    /// The Organization the event happened in.
+    pub organization: OrganizationSummary,
+    /// The Project the event happened in.
+    pub project: LinkProjectSummary,
+    /// The Work Item the event happened on.
+    pub work_item: WorkItemRefSummary,
+}
+
+/// A paginated profile activity page (newest first).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileActivityList {
+    /// One page of activity events.
+    pub items: Vec<ProfileActivity>,
     /// Pagination metadata.
     pub page: Page,
 }
@@ -534,9 +922,13 @@ pub struct CreateWorkItemRequest {
     /// The priority, when not the server default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
-    /// The assignee's user id.
+    /// The assignee's legacy user id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee_id: Option<String>,
+    /// The assignee's immutable public id (`usr_...`); preferred over
+    /// `assigneeId` on new bodies. The two fields are mutually exclusive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee_public_id: Option<String>,
     /// The sprint id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sprint_id: Option<String>,
@@ -570,9 +962,13 @@ pub struct UpdateWorkItemRequest {
     /// New priority.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
-    /// New assignee; `Some(None)` unassigns.
+    /// New assignee (legacy id); `Some(None)` unassigns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee_id: Option<Option<String>>,
+    /// New assignee (public id, preferred); `Some(None)` unassigns.
+    /// Mutually exclusive with `assigneeId`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee_public_id: Option<Option<String>>,
     /// New sprint; `Some(None)` unschedules.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sprint_id: Option<Option<String>>,
@@ -596,6 +992,7 @@ impl UpdateWorkItemRequest {
             && self.item_type.is_none()
             && self.priority.is_none()
             && self.assignee_id.is_none()
+            && self.assignee_public_id.is_none()
             && self.sprint_id.is_none()
             && self.parent_id.is_none()
             && self.story_points.is_none()
@@ -620,6 +1017,54 @@ pub struct CreateCommentRequest {
     /// The parent comment id, when replying.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_comment_id: Option<String>,
+}
+
+/// Body for `PATCH .../comments/{commentId}` (author-only edit).
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateCommentRequest {
+    /// The replacement comment body (same 2,000-character limit as creation).
+    pub body: String,
+}
+
+/// Body for `POST .../work-items/{key}/links`.
+///
+/// Exactly one of `targetKey` or `targetId` must be provided.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWorkItemLinkRequest {
+    /// The target Work Item's id (UUID).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
+    /// The target Work Item's human key (e.g. `HAM-43`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_key: Option<String>,
+    /// The relation: `blocks`, `blocked_by`, or `relates`.
+    pub relation: String,
+}
+
+/// Body for `PATCH .../projects/{key}`.
+///
+/// At least one field must be present; the Project key cannot change.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProjectRequest {
+    /// New display name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// New description; `Some(None)` clears it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Option<String>>,
+    /// New display color as a hex string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+impl UpdateProjectRequest {
+    /// Returns true when the request would send at least one field.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.name.is_none() && self.description.is_none() && self.color.is_none()
+    }
 }
 
 /// Body for `POST .../projects`.
@@ -697,6 +1142,60 @@ pub struct CreateLabelRequest {
     pub color: Option<String>,
 }
 
+/// Body for `POST .../bulk-work-items`.
+///
+/// Operations are validated server-side; the CLI forwards them as JSON values
+/// so malformed items surface as per-item embedded errors rather than local
+/// reimplementation of server validation rules.
+#[derive(Debug, Clone, Serialize)]
+pub struct BulkCreateEnvelope {
+    /// 1–50 create operations (`{projectKey, ...createFields}`).
+    pub operations: Vec<Value>,
+}
+
+/// Body for `PATCH .../bulk-work-items`.
+#[derive(Debug, Clone, Serialize)]
+pub struct BulkUpdateEnvelope {
+    /// `require-revision` (default) or `last-write-wins`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concurrency: Option<String>,
+    /// 1–50 update operations.
+    pub operations: Vec<Value>,
+}
+
+/// Body for `POST .../bulk-work-item-transitions`.
+#[derive(Debug, Clone, Serialize)]
+pub struct BulkTransitionEnvelope {
+    /// `require-revision` (default) or `last-write-wins`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concurrency: Option<String>,
+    /// 1–50 transition operations.
+    pub operations: Vec<Value>,
+}
+
+/// One per-item bulk result, in input order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkResult {
+    /// The input operation index this result corresponds to.
+    pub index: i64,
+    /// The per-item HTTP status (201/200 on success, 400/404/409 on failure).
+    pub status: i64,
+    /// The created/updated Work Item projection, when the item succeeded.
+    #[serde(default)]
+    pub work_item: Option<Value>,
+    /// The embedded error, when the item failed.
+    #[serde(default)]
+    pub error: Option<Value>,
+}
+
+/// The bulk result list (`{results: [...]}`); there is no `page` envelope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkResultList {
+    /// Per-item results in input order.
+    pub results: Vec<BulkResult>,
+}
+
 #[cfg(test)]
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -709,14 +1208,45 @@ mod tests {
             "id":"1","key":"HAM-1","projectId":"2","title":"T","description":null,
             "type":"task","status":"todo","priority":"low","assignee":null,"reporter":{"id":"r","name":"R"},
             "sprint":null,"parent":null,"labels":[{"id":"l","name":"api","color":"#fff"}],
-            "storyPoints":3,"dueDate":null,"createdAt":"2026-01-01T00:00:00Z",
+            "storyPoints":3,"dueDate":null,"archivedAt":null,
+            "createdAt":"2026-01-01T00:00:00Z",
             "updatedAt":"2026-01-02T00:00:00Z","revision":4
         }"##;
         let wi: WorkItem = serde_json::from_str(raw).unwrap();
         assert_eq!(wi.item_type, "task");
-        assert_eq!(wi.reporter.as_ref().unwrap().name, "R");
+        assert_eq!(wi.reporter.as_ref().unwrap().name(), "R");
         assert_eq!(wi.labels.len(), 1);
         assert_eq!(wi.revision, 4);
+        assert_eq!(wi.archived_at, None);
+    }
+
+    #[test]
+    fn work_item_accepts_public_user_summaries() {
+        let raw = r##"{
+            "id":"1","key":"HAM-1","projectId":"2","title":"T","description":null,
+            "type":"task","status":"done","priority":"low",
+            "assignee":{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"A"},
+            "reporter":null,
+            "sprint":null,"parent":null,"labels":[],
+            "storyPoints":null,"dueDate":null,"archivedAt":"2026-02-01T00:00:00Z",
+            "createdAt":"2026-01-01T00:00:00Z",
+            "updatedAt":"2026-01-02T00:00:00Z","revision":5
+        }"##;
+        let wi: WorkItem = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            wi.assignee.as_ref().unwrap().public_id(),
+            Some("usr_cPbfeqnghA-RLpDVOMQhHg")
+        );
+        assert_eq!(wi.archived_at.as_deref(), Some("2026-02-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn work_item_summary_is_sparse_tolerant() {
+        let raw = r#"{"id":"1","key":"HAM-1","revision":2,"title":"Only title"}"#;
+        let item: WorkItemSummary = serde_json::from_str(raw).unwrap();
+        assert_eq!(item.title.as_deref(), Some("Only title"));
+        assert_eq!(item.status, None);
+        assert_eq!(item.updated_at, None);
     }
 
     #[test]
@@ -736,16 +1266,18 @@ mod tests {
         let value = serde_json::to_value(&req).unwrap();
         assert_eq!(value["storyPoints"], 3);
         assert!(value.get("assigneeId").is_none());
+        assert!(value.get("assigneePublicId").is_none());
     }
 
     #[test]
     fn update_request_serializes_tri_state_clear() {
         let req = UpdateWorkItemRequest {
-            assignee_id: Some(None),
+            assignee_public_id: Some(None),
             ..Default::default()
         };
         let value = serde_json::to_value(&req).unwrap();
-        assert!(value["assigneeId"].is_null());
+        assert!(value["assigneePublicId"].is_null());
+        assert!(value.get("assigneeId").is_none());
     }
 
     #[test]
@@ -830,5 +1362,137 @@ mod tests {
         let value = serde_json::to_value(&req).unwrap();
         assert!(value.get("startDate").is_none());
         assert!(value.get("targetPoints").is_none());
+    }
+
+    #[test]
+    fn project_parses_revision_and_archived_at() {
+        let raw = r##"{
+            "id":"p1","organizationId":"o1","key":"HAM","name":"Ham","description":null,
+            "color":"#3b82f6","revision":7,"archivedAt":"2026-03-01T00:00:00Z",
+            "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-03-01T00:00:00Z"
+        }"##;
+        let project: Project = serde_json::from_str(raw).unwrap();
+        assert_eq!(project.revision, 7);
+        assert_eq!(project.archived_at.as_deref(), Some("2026-03-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn context_summary_flattens_and_carries_context() {
+        let raw = r##"{
+            "id":"1","key":"HAM-1","revision":1,"title":"T","status":"todo",
+            "assignee":{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"A"},
+            "project":{"id":"p","key":"HAM","name":"Ham","color":"#000000"},
+            "organization":{"id":"o","slug":"acme","name":"Acme"}
+        }"##;
+        let row: WorkItemContextSummary = serde_json::from_str(raw).unwrap();
+        assert_eq!(row.summary.key, "HAM-1");
+        assert_eq!(row.project.key, "HAM");
+        assert_eq!(row.organization.slug, "acme");
+        assert_eq!(
+            row.summary.assignee.as_ref().unwrap().public_id(),
+            Some("usr_cPbfeqnghA-RLpDVOMQhHg")
+        );
+    }
+
+    #[test]
+    fn comment_parses_edited_at_and_public_author() {
+        let raw = r##"{
+            "id":"c1","workItemId":"w1","parentCommentId":null,
+            "author":{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"A"},
+            "body":"hi","deleted":false,
+            "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z",
+            "editedAt":"2026-01-03T00:00:00Z"
+        }"##;
+        let comment: Comment = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            comment.author.public_id(),
+            Some("usr_cPbfeqnghA-RLpDVOMQhHg")
+        );
+        assert_eq!(comment.edited_at.as_deref(), Some("2026-01-03T00:00:00Z"));
+    }
+
+    #[test]
+    fn link_and_activity_parse() {
+        let link_raw = r##"{
+            "id":"l1","relation":"blocks",
+            "otherWorkItem":{"id":"2","key":"HAM-2","project":{"id":"p","key":"HAM","name":"Ham"},"title":"Other","type":"task","status":"todo"},
+            "createdBy":null,"createdAt":"2026-01-01T00:00:00Z"
+        }"##;
+        let link: WorkItemLink = serde_json::from_str(link_raw).unwrap();
+        assert_eq!(link.relation, "blocks");
+        assert_eq!(link.other_work_item.key, "HAM-2");
+
+        let activity_raw = r##"{
+            "id":"a1","action":"status_changed",
+            "actor":{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"A"},
+            "detail":{"from":"todo","to":"done"},
+            "createdAt":"2026-01-01T00:00:00Z",
+            "workItem":{"id":"1","key":"HAM-1","title":"T"},
+            "organization":{"id":"o","slug":"acme","name":"Acme"},
+            "project":{"id":"p","key":"HAM","name":"Ham"}
+        }"##;
+        let activity: ProfileActivity = serde_json::from_str(activity_raw).unwrap();
+        assert_eq!(activity.activity.action, "status_changed");
+        assert_eq!(activity.work_item.key, "HAM-1");
+        assert_eq!(activity.organization.slug, "acme");
+        assert_eq!(activity.project.key, "HAM");
+    }
+
+    #[test]
+    fn bulk_results_parse() {
+        let raw = r##"{
+            "results":[
+                {"index":0,"status":201,"workItem":{"id":"1","key":"HAM-1"}},
+                {"index":1,"status":400,"error":{"code":"VALIDATION_ERROR","message":"bad"}}
+            ]
+        }"##;
+        let list: BulkResultList = serde_json::from_str(raw).unwrap();
+        assert_eq!(list.results.len(), 2);
+        assert_eq!(list.results[0].work_item.as_ref().unwrap()["key"], "HAM-1");
+        assert_eq!(
+            list.results[1].error.as_ref().unwrap()["code"],
+            "VALIDATION_ERROR"
+        );
+    }
+
+    #[test]
+    fn user_summary_accepts_both_shapes() {
+        let legacy: UserSummary = serde_json::from_str(r#"{"id":"u1","name":"A"}"#).unwrap();
+        assert_eq!(legacy.name(), "A");
+        assert_eq!(legacy.legacy_id(), Some("u1"));
+        assert_eq!(legacy.public_id(), None);
+        let public: UserSummary =
+            serde_json::from_str(r#"{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"B"}"#)
+                .unwrap();
+        assert_eq!(public.public_id(), Some("usr_cPbfeqnghA-RLpDVOMQhHg"));
+    }
+
+    #[test]
+    fn user_profile_parses() {
+        let raw = r##"{
+            "publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"Steven",
+            "avatarUrl":null,"joinedAt":"2026-01-15T14:30:00.000Z",
+            "isCurrentUser":false,
+            "sharedOrganizations":[{"organization":{"id":"o","slug":"acme","name":"Acme"},"username":"steven"}],
+            "stats":{"projects":6,"workItemsAssigned":7,"workItemsCreated":42,"workItemsCompleted":18,"comments":27}
+        }"##;
+        let profile: UserProfile = serde_json::from_str(raw).unwrap();
+        assert_eq!(profile.stats.work_items_created, 42);
+        assert_eq!(
+            profile.shared_organizations[0].username.as_deref(),
+            Some("steven")
+        );
+    }
+
+    #[test]
+    fn update_project_request_requires_a_field() {
+        let req = UpdateProjectRequest {
+            color: Some("#00ff00".into()),
+            ..Default::default()
+        };
+        assert!(!req.is_empty());
+        let value = serde_json::to_value(&req).unwrap();
+        assert_eq!(value["color"], "#00ff00");
+        assert!(value.get("name").is_none());
     }
 }

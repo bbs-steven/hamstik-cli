@@ -95,6 +95,8 @@ pub enum Command {
     Label(LabelArgs),
     /// Work with work items.
     Work(Box<WorkArgs>),
+    /// View user profiles, work, activity, and avatars.
+    User(UserArgs),
     /// Verify configuration, credentials, and connectivity.
     Doctor,
     /// Generate a shell completion script.
@@ -193,11 +195,38 @@ pub enum OrgCommand {
         /// Organization slug.
         slug: String,
     },
+    /// List active members of an organization.
+    Members {
+        /// Organization slug.
+        slug: String,
+        /// Literal substring filter over name or username.
+        #[arg(long, value_name = "TEXT")]
+        search: Option<String>,
+        /// Pagination options.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
+    /// List work items across the organization.
+    Work(Box<OrgWorkListArgs>),
     /// Set the default organization for the active profile.
     Use {
         /// Organization slug.
         slug: String,
     },
+}
+
+/// Arguments for `org work`.
+#[derive(Args, Debug)]
+pub struct OrgWorkListArgs {
+    /// Filter by project key (repeatable).
+    #[arg(long)]
+    pub project: Vec<String>,
+    /// Shared Work Item filters.
+    #[command(flatten)]
+    pub filters: WorkFilters,
+    /// Pagination options.
+    #[command(flatten)]
+    pub pagination: PaginationArgs,
 }
 
 /// Arguments for the `project` command group.
@@ -212,7 +241,14 @@ pub struct ProjectArgs {
 #[derive(Subcommand, Debug)]
 pub enum ProjectCommand {
     /// List projects in the organization.
-    List(PaginationArgs),
+    List {
+        /// List only archived projects (true) or only unarchived (false).
+        #[arg(long, value_name = "true|false")]
+        archived: Option<bool>,
+        /// Pagination options.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
     /// View a project.
     View {
         /// Project key.
@@ -220,6 +256,42 @@ pub enum ProjectCommand {
     },
     /// Create a project (Organization administrators only).
     Create(ProjectCreateArgs),
+    /// Edit a project (Organization administrators only).
+    Edit(ProjectEditArgs),
+    /// Archive a project (Organization administrators only).
+    Archive {
+        /// Project key.
+        key: String,
+        /// Bypass revision conflict protection (If-Match: *).
+        #[arg(long)]
+        force: bool,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Unarchive a project (Organization administrators only).
+    Unarchive {
+        /// Project key.
+        key: String,
+        /// Bypass revision conflict protection (If-Match: *).
+        #[arg(long)]
+        force: bool,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Show a project's activity feed (newest first).
+    Activity {
+        /// Project key (overrides context).
+        #[arg(long)]
+        project: Option<String>,
+        /// Only events strictly after this RFC 3339 timestamp.
+        #[arg(long, value_name = "RFC3339")]
+        since: Option<String>,
+        /// Pagination options.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
     /// Set the default project for the active profile.
     Use {
         /// Project key.
@@ -245,6 +317,38 @@ pub struct ProjectCreateArgs {
     /// Display color as a hex string (e.g. #3b82f6).
     #[arg(long, value_name = "HEX")]
     pub color: Option<String>,
+    /// Explicit idempotency key.
+    #[arg(long = "idempotency-key", value_name = "KEY")]
+    pub idempotency_key: Option<String>,
+}
+
+/// Arguments for `project edit`.
+#[derive(Args, Debug)]
+pub struct ProjectEditArgs {
+    /// Project key.
+    pub key: String,
+    /// New name.
+    #[arg(long)]
+    pub name: Option<String>,
+    /// New description text.
+    #[arg(long, conflicts_with = "clear_description")]
+    pub description: Option<String>,
+    /// New description source (path, or - for stdin).
+    #[arg(
+        long = "description-file",
+        value_name = "PATH",
+        conflicts_with = "clear_description"
+    )]
+    pub description_file: Option<String>,
+    /// New display color as a hex string.
+    #[arg(long, value_name = "HEX")]
+    pub color: Option<String>,
+    /// Clear the description.
+    #[arg(long = "clear-description")]
+    pub clear_description: bool,
+    /// Bypass revision conflict protection (If-Match: *).
+    #[arg(long)]
+    pub force: bool,
     /// Explicit idempotency key.
     #[arg(long = "idempotency-key", value_name = "KEY")]
     pub idempotency_key: Option<String>,
@@ -394,6 +498,96 @@ pub struct WorkArgs {
     pub command: WorkCommand,
 }
 
+/// Arguments for the `user` command group.
+#[derive(Args, Debug)]
+pub struct UserArgs {
+    /// The user subcommand to run.
+    #[command(subcommand)]
+    pub command: UserCommand,
+}
+
+/// User profile subcommands.
+#[derive(Subcommand, Debug)]
+pub enum UserCommand {
+    /// View a user's profile summary.
+    View {
+        /// The user's public ID (usr_...).
+        public_id: String,
+    },
+    /// List work items involving a user.
+    Work {
+        /// The user's public ID (usr_...).
+        public_id: String,
+        /// Restrict to involvement kind (repeatable).
+        #[arg(long, value_enum)]
+        involvement: Vec<InvolvementArg>,
+        /// Filter by organization slug (repeatable).
+        #[arg(long)]
+        org: Vec<String>,
+        /// Filter by project key (repeatable).
+        #[arg(long)]
+        project: Vec<String>,
+        /// Filter by status (repeatable).
+        #[arg(long, value_enum)]
+        status: Vec<StatusArg>,
+        /// Status scope.
+        #[arg(long, value_enum)]
+        scope: Option<ScopeArg>,
+        /// Filter by priority (repeatable).
+        #[arg(long, value_enum)]
+        priority: Vec<PriorityArg>,
+        /// Free-text search.
+        #[arg(long = "search", value_name = "TEXT")]
+        search: Option<String>,
+        /// Pagination options.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
+    /// Show a user's visible activity (newest first).
+    Activity {
+        /// The user's public ID (usr_...).
+        public_id: String,
+        /// Only events strictly after this RFC 3339 timestamp.
+        #[arg(long, value_name = "RFC3339")]
+        since: Option<String>,
+        /// Pagination options.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
+    /// Download a user's avatar.
+    Avatar {
+        /// The user's public ID (usr_...).
+        public_id: String,
+        /// Output path (defaults to the public ID with a content-type
+        /// derived extension).
+        #[arg(long = "output", value_name = "PATH", short = 'o')]
+        output: Option<String>,
+    },
+}
+
+/// Profile work involvement kinds.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvolvementArg {
+    /// Items currently assigned to the user.
+    Assigned,
+    /// Items created (reported) by the user.
+    Created,
+    /// Items the user commented on.
+    Commented,
+}
+
+impl InvolvementArg {
+    /// The wire value for this involvement kind.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InvolvementArg::Assigned => "assigned",
+            InvolvementArg::Created => "created",
+            InvolvementArg::Commented => "commented",
+        }
+    }
+}
+
 /// Work item subcommands.
 #[derive(Subcommand, Debug)]
 pub enum WorkCommand {
@@ -437,11 +631,62 @@ pub enum WorkCommand {
     Attachment(WorkAttachmentArgs),
     /// Manage work item comments.
     Comment(CommentArgs),
+    /// Manage work item links.
+    Link(WorkLinkArgs),
+    /// Show a work item's activity feed.
+    Activity {
+        /// Work item key.
+        key: String,
+        /// Only events strictly after this RFC 3339 timestamp.
+        #[arg(long, value_name = "RFC3339")]
+        since: Option<String>,
+        /// Pagination options.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
+    /// Archive a work item (Organization administrators).
+    Archive {
+        /// Work item key.
+        key: String,
+        /// Bypass revision conflict protection (If-Match: *).
+        #[arg(long)]
+        force: bool,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Unarchive a work item (Organization administrators).
+    Unarchive {
+        /// Work item key.
+        key: String,
+        /// Bypass revision conflict protection (If-Match: *).
+        #[arg(long)]
+        force: bool,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Soft-delete a work item (Organization owners only).
+    Delete {
+        /// Work item key.
+        key: String,
+        /// Also soft-delete the entire descendant tree.
+        #[arg(long)]
+        cascade: bool,
+        /// Bypass revision conflict protection (If-Match: *).
+        #[arg(long)]
+        force: bool,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Create, update, or transition many work items in one request.
+    Bulk(WorkBulkArgs),
 }
 
-/// Arguments for `work list`.
+/// Work Item filter options shared by `work list` and `org work`.
 #[derive(Args, Debug)]
-pub struct WorkListArgs {
+pub struct WorkFilters {
     /// Free-text search.
     #[arg(long = "search", value_name = "TEXT")]
     pub search: Option<String>,
@@ -457,8 +702,8 @@ pub struct WorkListArgs {
     /// Filter by priority (repeatable).
     #[arg(long, value_enum)]
     pub priority: Vec<PriorityArg>,
-    /// Filter by assignee: me, none, or a user UUID.
-    #[arg(long, value_name = "ME|NONE|UUID")]
+    /// Filter by assignee: me, none, a user UUID, or a public ID (usr_...).
+    #[arg(long, value_name = "ME|NONE|ID")]
     pub assignee: Option<String>,
     /// Filter by sprint: none or a sprint UUID.
     #[arg(long, value_name = "NONE|UUID")]
@@ -478,9 +723,49 @@ pub struct WorkListArgs {
     /// Only items updated at/after this RFC 3339 timestamp.
     #[arg(long = "updated-after", value_name = "RFC3339")]
     pub updated_after: Option<String>,
+    /// Only overdue items (true) or only on-track items (false).
+    #[arg(long, value_name = "true|false")]
+    pub overdue: Option<bool>,
+    /// Only items due strictly before this RFC 3339 timestamp.
+    #[arg(long = "due-before", value_name = "RFC3339")]
+    pub due_before: Option<String>,
+    /// Only items due strictly after this RFC 3339 timestamp.
+    #[arg(long = "due-after", value_name = "RFC3339")]
+    pub due_after: Option<String>,
+    /// Result ordering: updated, dueDate, priority, or rank.
+    #[arg(long, value_enum)]
+    pub sort: Option<SortArg>,
+    /// Include archived (true) or only unarchived (false) items.
+    #[arg(long, value_name = "true|false")]
+    pub archived: Option<bool>,
+    /// Comma-separated summary fields; an empty value selects all fields.
+    #[arg(long = "fields", value_name = "FIELDS")]
+    pub fields: Option<String>,
     /// Shorthand for --assignee me.
     #[arg(long)]
     pub mine: bool,
+}
+
+impl WorkFilters {
+    /// Copies the filter selections into a [`ListWorkItemsQuery`]-shaped
+    /// destination closure-wise; used by collection commands.
+    pub fn assignee_query(&self) -> Option<String> {
+        self.assignee.clone().or_else(|| {
+            if self.mine {
+                Some("me".to_string())
+            } else {
+                None
+            }
+        })
+    }
+}
+
+/// Arguments for `work list`.
+#[derive(Args, Debug)]
+pub struct WorkListArgs {
+    /// Shared Work Item filters.
+    #[command(flatten)]
+    pub filters: WorkFilters,
     /// Pagination options.
     #[command(flatten)]
     pub pagination: PaginationArgs,
@@ -633,6 +918,22 @@ pub enum CommentCommand {
         #[arg(long = "idempotency-key", value_name = "KEY")]
         idempotency_key: Option<String>,
     },
+    /// Edit your own comment.
+    Edit {
+        /// Work item key.
+        key: String,
+        /// Comment id (UUID).
+        comment_id: String,
+        /// Replacement body.
+        #[arg(long, conflicts_with = "body_file")]
+        body: Option<String>,
+        /// Replacement body source (path, or - for stdin).
+        #[arg(long = "body-file", value_name = "PATH")]
+        body_file: Option<String>,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
     /// Delete your own comment (only when it has no replies).
     Delete {
         /// Work item key.
@@ -735,6 +1036,178 @@ pub enum WorkAttachmentCommand {
         /// Attachment id (UUID).
         attachment_id: String,
     },
+}
+
+/// Arguments for the `work link` command group.
+#[derive(Args, Debug)]
+pub struct WorkLinkArgs {
+    /// The link subcommand to run.
+    #[command(subcommand)]
+    pub command: WorkLinkCommand,
+}
+
+/// Work item link subcommands.
+#[derive(Subcommand, Debug)]
+pub enum WorkLinkCommand {
+    /// List links from a work item.
+    List {
+        /// Work item key.
+        key: String,
+        /// Pagination options.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
+    /// Link this work item to another.
+    Add {
+        /// Work item key.
+        key: String,
+        /// Target work item key (e.g. HAM-43).
+        #[arg(long, value_name = "KEY", conflicts_with = "target_id")]
+        target_key: Option<String>,
+        /// Target work item id (UUID).
+        #[arg(long = "target-id", value_name = "UUID", conflicts_with = "target_key")]
+        target_id: Option<String>,
+        /// Relation kind.
+        #[arg(long, value_enum)]
+        relation: RelationArg,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Delete a link by id.
+    Delete {
+        /// Work item key.
+        key: String,
+        /// Link id (UUID).
+        link_id: String,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+}
+
+/// Arguments for `work bulk`.
+#[derive(Args, Debug)]
+pub struct WorkBulkArgs {
+    /// The bulk subcommand to run.
+    #[command(subcommand)]
+    pub command: WorkBulkCommand,
+}
+
+/// Bulk work item subcommands.
+#[derive(Subcommand, Debug)]
+pub enum WorkBulkCommand {
+    /// Create up to 50 work items in one request.
+    Create {
+        /// Operations as a JSON array file (path, or - for stdin).
+        #[arg(long = "operations-file", value_name = "PATH")]
+        operations_file: String,
+        /// Project key (overrides context; used to validate access).
+        #[arg(long)]
+        project: Option<String>,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Update up to 50 work items in one request.
+    Update {
+        /// Operations as a JSON array file (path, or - for stdin).
+        #[arg(long = "operations-file", value_name = "PATH")]
+        operations_file: String,
+        /// Concurrency mode: require-revision (default) or last-write-wins.
+        #[arg(long, value_enum)]
+        concurrency: Option<ConcurrencyArg>,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Transition up to 50 work items in one request.
+    Transition {
+        /// Operations as a JSON array file (path, or - for stdin).
+        #[arg(long = "operations-file", value_name = "PATH")]
+        operations_file: String,
+        /// Concurrency mode: require-revision (default) or last-write-wins.
+        #[arg(long, value_enum)]
+        concurrency: Option<ConcurrencyArg>,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+}
+
+/// Bulk concurrency mode.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConcurrencyArg {
+    /// Every operation must carry a positive revision.
+    #[value(name = "require-revision")]
+    RequireRevision,
+    /// Revisions are ignored; last write wins.
+    #[value(name = "last-write-wins")]
+    LastWriteWins,
+}
+
+impl ConcurrencyArg {
+    /// The wire value for this mode.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConcurrencyArg::RequireRevision => "require-revision",
+            ConcurrencyArg::LastWriteWins => "last-write-wins",
+        }
+    }
+}
+
+/// Work item link relations.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelationArg {
+    /// This item blocks the target.
+    #[value(name = "blocks")]
+    Blocks,
+    /// This item is blocked by the target.
+    #[value(name = "blocked_by")]
+    BlockedBy,
+    /// The items are related.
+    #[value(name = "relates")]
+    Relates,
+}
+
+impl RelationArg {
+    /// The wire value for this relation.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RelationArg::Blocks => "blocks",
+            RelationArg::BlockedBy => "blocked_by",
+            RelationArg::Relates => "relates",
+        }
+    }
+}
+
+/// Work item collection ordering.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortArg {
+    /// Most recently updated first (default).
+    Updated,
+    /// Earliest due date first, undated last.
+    #[value(name = "dueDate")]
+    DueDate,
+    /// Urgent → high → medium → low.
+    Priority,
+    /// Overdue first, then by status bucket and priority.
+    Rank,
+}
+
+impl SortArg {
+    /// The wire value for this sort.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SortArg::Updated => "updated",
+            SortArg::DueDate => "dueDate",
+            SortArg::Priority => "priority",
+            SortArg::Rank => "rank",
+        }
+    }
 }
 
 /// Arguments for `completion`.

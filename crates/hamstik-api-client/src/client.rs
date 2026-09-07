@@ -660,6 +660,27 @@ fn push_list(query: &mut Vec<(String, String)>, opts: &ListOptions) {
     }
 }
 
+fn push_bool(query: &mut Vec<(String, String)>, name: &str, value: Option<bool>) {
+    if let Some(flag) = value {
+        query.push((
+            name.to_string(),
+            if flag { "true" } else { "false" }.to_string(),
+        ));
+    }
+}
+
+fn push_scalar(query: &mut Vec<(String, String)>, name: &str, value: &Option<String>) {
+    if let Some(text) = value {
+        query.push((name.to_string(), text.clone()));
+    }
+}
+
+fn push_repeated(query: &mut Vec<(String, String)>, name: &str, values: &[String]) {
+    for value in values {
+        query.push((name.to_string(), value.clone()));
+    }
+}
+
 fn work_item_query(q: &ListWorkItemsQuery) -> Vec<(String, String)> {
     let mut out = Vec::new();
     if let Some(limit) = q.limit {
@@ -668,45 +689,68 @@ fn work_item_query(q: &ListWorkItemsQuery) -> Vec<(String, String)> {
     if let Some(cursor) = &q.cursor {
         out.push(("cursor".to_string(), cursor.clone()));
     }
-    if let Some(text) = &q.q {
-        out.push(("q".to_string(), text.clone()));
-    }
+    push_scalar(&mut out, "q", &q.q);
     for status in &q.status {
         out.push(("status".to_string(), status.clone()));
     }
-    if let Some(scope) = &q.scope {
-        out.push(("scope".to_string(), scope.clone()));
-    }
+    push_scalar(&mut out, "scope", &q.scope);
     for item_type in &q.item_type {
         out.push(("type".to_string(), item_type.clone()));
     }
     for priority in &q.priority {
         out.push(("priority".to_string(), priority.clone()));
     }
-    if let Some(assignee) = &q.assignee {
-        out.push(("assignee".to_string(), assignee.clone()));
-    }
-    if let Some(sprint) = &q.sprint {
-        out.push(("sprint".to_string(), sprint.clone()));
-    }
-    for label in &q.label {
-        out.push(("label".to_string(), label.clone()));
-    }
-    for name in &q.label_name {
-        out.push(("labelName".to_string(), name.clone()));
-    }
-    if let Some(parent) = &q.parent {
-        out.push(("parent".to_string(), parent.clone()));
-    }
+    push_scalar(&mut out, "assignee", &q.assignee);
+    push_scalar(&mut out, "sprint", &q.sprint);
+    push_repeated(&mut out, "label", &q.label);
+    push_repeated(&mut out, "labelName", &q.label_name);
+    push_scalar(&mut out, "parent", &q.parent);
     if let Some(top_level) = q.top_level {
         out.push((
             "topLevel".to_string(),
             if top_level { "1" } else { "0" }.to_string(),
         ));
     }
-    if let Some(updated_after) = &q.updated_after {
-        out.push(("updatedAfter".to_string(), updated_after.clone()));
+    push_scalar(&mut out, "updatedAfter", &q.updated_after);
+    push_repeated(&mut out, "project", &q.projects);
+    push_repeated(&mut out, "organization", &q.organizations);
+    push_repeated(&mut out, "involvement", &q.involvement);
+    push_bool(&mut out, "overdue", q.overdue);
+    push_scalar(&mut out, "dueBefore", &q.due_before);
+    push_scalar(&mut out, "dueAfter", &q.due_after);
+    push_scalar(&mut out, "sort", &q.sort);
+    push_bool(&mut out, "archived", q.archived);
+    // An empty `fields=` value is meaningful (selects the complete summary),
+    // so `Some("")` must still be sent while `None` omits the parameter.
+    if let Some(fields) = &q.fields {
+        out.push(("fields".to_string(), fields.clone()));
     }
+    out
+}
+
+fn organization_users_query(opts: &ListOrganizationUsersOptions) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    push_list(
+        &mut out,
+        &ListOptions {
+            limit: opts.limit,
+            cursor: opts.cursor.clone(),
+        },
+    );
+    push_scalar(&mut out, "q", &opts.q);
+    out
+}
+
+fn activity_query(opts: &ActivityOptions) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    push_list(
+        &mut out,
+        &ListOptions {
+            limit: opts.limit,
+            cursor: opts.cursor.clone(),
+        },
+    );
+    push_scalar(&mut out, "since", &opts.since);
     out
 }
 
@@ -732,7 +776,7 @@ pub trait HamstikApi: Send + Sync {
     async fn list_projects(
         &self,
         org_slug: &str,
-        opts: ListOptions,
+        opts: ListProjectsOptions,
     ) -> Result<ApiResponse<ProjectList>, ClientError>;
     /// `GET /organizations/{slug}/projects/{key}`: one project.
     async fn get_project(
@@ -936,6 +980,183 @@ pub trait HamstikApi: Send + Sync {
         key: &str,
         attachment_id: &str,
     ) -> Result<(), ClientError>;
+    /// `GET /organizations/{slug}/users`: the member directory
+    /// (`organization:members:read`).
+    async fn list_organization_users(
+        &self,
+        org_slug: &str,
+        opts: ListOrganizationUsersOptions,
+    ) -> Result<ApiResponse<OrganizationUserList>, ClientError>;
+    /// `GET /organizations/{slug}/work-items`: Work Items with Organization
+    /// and Project context. Only the fields the endpoint accepts may be set.
+    async fn list_organization_work_items(
+        &self,
+        org_slug: &str,
+        query: ListWorkItemsQuery,
+    ) -> Result<ApiResponse<WorkItemContextList>, ClientError>;
+    /// `GET /my/work`: Work Items assigned to the PAT owner.
+    async fn list_my_work(
+        &self,
+        query: ListWorkItemsQuery,
+    ) -> Result<ApiResponse<WorkItemContextList>, ClientError>;
+    /// `GET /users/{publicId}`: an authenticated profile summary.
+    async fn get_user_profile(
+        &self,
+        public_id: &str,
+    ) -> Result<ApiResponse<UserProfile>, ClientError>;
+    /// `GET /users/{publicId}/work`: visible Work Items involving the user.
+    async fn list_user_profile_work(
+        &self,
+        public_id: &str,
+        query: ListWorkItemsQuery,
+    ) -> Result<ApiResponse<WorkItemContextList>, ClientError>;
+    /// `GET /users/{publicId}/activity`: meaningful activity by the user.
+    async fn list_user_profile_activity(
+        &self,
+        public_id: &str,
+        opts: ActivityOptions,
+    ) -> Result<ApiResponse<ProfileActivityList>, ClientError>;
+    /// `GET /users/{publicId}/avatar`: the profile's avatar bytes, when one
+    /// exists (404 otherwise).
+    async fn get_user_profile_avatar(
+        &self,
+        public_id: &str,
+    ) -> Result<DownloadedAttachment, ClientError>;
+    /// `PATCH .../projects/{key}`: update a Project (Organization
+    /// administrators, `If-Match`, idempotent).
+    async fn update_project(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        body: &UpdateProjectRequest,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<Project>, ClientError>;
+    /// `POST .../projects/{key}/archive`: archive a Project (idempotent,
+    /// `If-Match`, empty `{}` body).
+    async fn archive_project(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<Project>, ClientError>;
+    /// `POST .../projects/{key}/unarchive`: unarchive a Project (idempotent,
+    /// `If-Match`, empty `{}` body).
+    async fn unarchive_project(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<Project>, ClientError>;
+    /// `GET .../work-items/{key}/links`: visible links from this Work Item.
+    async fn list_work_item_links(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        opts: ListOptions,
+    ) -> Result<ApiResponse<WorkItemLinkList>, ClientError>;
+    /// `POST .../work-items/{key}/links`: link two Work Items (idempotent).
+    async fn create_work_item_link(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        body: &CreateWorkItemLinkRequest,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<WorkItemLink>, ClientError>;
+    /// `DELETE .../work-items/{key}/links/{linkId}`: delete a link (204).
+    async fn delete_work_item_link(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        link_id: &str,
+        idempotency_key: &str,
+    ) -> Result<(), ClientError>;
+    /// `GET .../work-items/{key}/activity`: chronological (oldest-first)
+    /// Work Item activity.
+    async fn list_work_item_activity(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        opts: ActivityOptions,
+    ) -> Result<ApiResponse<ActivityList>, ClientError>;
+    /// `GET .../projects/{key}/activity`: newest-first Project activity.
+    async fn list_project_activity(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        opts: ActivityOptions,
+    ) -> Result<ApiResponse<ProjectActivityList>, ClientError>;
+    /// `DELETE .../work-items/{key}`: soft-delete a Work Item (Organization
+    /// owner, `If-Match`, idempotent). `cascade` soft-deletes the descendant
+    /// tree atomically.
+    async fn delete_work_item(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        cascade: bool,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<(), ClientError>;
+    /// `POST .../work-items/{key}/archive`: archive a Work Item (idempotent,
+    /// `If-Match`, empty `{}` body).
+    async fn archive_work_item(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<WorkItem>, ClientError>;
+    /// `POST .../work-items/{key}/unarchive`: unarchive a Work Item
+    /// (idempotent, `If-Match`, empty `{}` body).
+    async fn unarchive_work_item(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<WorkItem>, ClientError>;
+    /// `PATCH .../comments/{commentId}`: edit an authored comment
+    /// (idempotent).
+    async fn update_comment(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        comment_id: &str,
+        body: &UpdateCommentRequest,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<Comment>, ClientError>;
+    /// `POST .../bulk-work-items`: create up to 50 Work Items per request.
+    async fn bulk_create_work_items(
+        &self,
+        org_slug: &str,
+        body: &BulkCreateEnvelope,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<BulkResultList>, ClientError>;
+    /// `PATCH .../bulk-work-items`: update up to 50 Work Items per request.
+    async fn bulk_update_work_items(
+        &self,
+        org_slug: &str,
+        body: &BulkUpdateEnvelope,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<BulkResultList>, ClientError>;
+    /// `POST .../bulk-work-item-transitions`: transition up to 50 Work Items
+    /// per request.
+    async fn bulk_transition_work_items(
+        &self,
+        org_slug: &str,
+        body: &BulkTransitionEnvelope,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<BulkResultList>, ClientError>;
 }
 
 #[async_trait]
@@ -987,10 +1208,17 @@ impl HamstikApi for HamstikClient {
     async fn list_projects(
         &self,
         org_slug: &str,
-        opts: ListOptions,
+        opts: ListProjectsOptions,
     ) -> Result<ApiResponse<ProjectList>, ClientError> {
         let mut query = Vec::new();
-        push_list(&mut query, &opts);
+        push_list(
+            &mut query,
+            &ListOptions {
+                limit: opts.limit,
+                cursor: opts.cursor.clone(),
+            },
+        );
+        push_bool(&mut query, "archived", opts.archived);
         self.send_json(RequestSpec {
             method: Method::GET,
             segments: vec![
@@ -1652,6 +1880,548 @@ impl HamstikApi for HamstikClient {
             query: Vec::new(),
             headers: Vec::new(),
             body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn list_organization_users(
+        &self,
+        org_slug: &str,
+        opts: ListOrganizationUsersOptions,
+    ) -> Result<ApiResponse<OrganizationUserList>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::GET,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "users".to_string(),
+            ],
+            query: organization_users_query(&opts),
+            headers: Vec::new(),
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn list_organization_work_items(
+        &self,
+        org_slug: &str,
+        query: ListWorkItemsQuery,
+    ) -> Result<ApiResponse<WorkItemContextList>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::GET,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "work-items".to_string(),
+            ],
+            query: work_item_query(&query),
+            headers: Vec::new(),
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn list_my_work(
+        &self,
+        query: ListWorkItemsQuery,
+    ) -> Result<ApiResponse<WorkItemContextList>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::GET,
+            segments: vec!["my".to_string(), "work".to_string()],
+            query: work_item_query(&query),
+            headers: Vec::new(),
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn get_user_profile(
+        &self,
+        public_id: &str,
+    ) -> Result<ApiResponse<UserProfile>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::GET,
+            segments: vec!["users".to_string(), public_id.to_string()],
+            query: Vec::new(),
+            headers: Vec::new(),
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn list_user_profile_work(
+        &self,
+        public_id: &str,
+        query: ListWorkItemsQuery,
+    ) -> Result<ApiResponse<WorkItemContextList>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::GET,
+            segments: vec![
+                "users".to_string(),
+                public_id.to_string(),
+                "work".to_string(),
+            ],
+            query: work_item_query(&query),
+            headers: Vec::new(),
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn list_user_profile_activity(
+        &self,
+        public_id: &str,
+        opts: ActivityOptions,
+    ) -> Result<ApiResponse<ProfileActivityList>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::GET,
+            segments: vec![
+                "users".to_string(),
+                public_id.to_string(),
+                "activity".to_string(),
+            ],
+            query: activity_query(&opts),
+            headers: Vec::new(),
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn get_user_profile_avatar(
+        &self,
+        public_id: &str,
+    ) -> Result<DownloadedAttachment, ClientError> {
+        self.send_bytes(RequestSpec {
+            method: Method::GET,
+            segments: vec![
+                "users".to_string(),
+                public_id.to_string(),
+                "avatar".to_string(),
+            ],
+            query: Vec::new(),
+            headers: Vec::new(),
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn update_project(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        body: &UpdateProjectRequest,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<Project>, ClientError> {
+        let payload = serde_json::to_value(body)
+            .map_err(|err| ClientError::Protocol(format!("invalid request body: {err}")))?;
+        self.send_json(RequestSpec {
+            method: Method::PATCH,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![
+                (IF_MATCH.clone(), if_match.to_string()),
+                (header_idempotency_key(), idempotency_key.to_string()),
+            ],
+            body: Some(&payload),
+            // PATCH is never auto-retried.
+            retryable: false,
+        })
+        .await
+    }
+
+    async fn archive_project(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<Project>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::POST,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "archive".to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![
+                (IF_MATCH.clone(), if_match.to_string()),
+                (header_idempotency_key(), idempotency_key.to_string()),
+            ],
+            body: Some(&serde_json::json!({})),
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn unarchive_project(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<Project>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::POST,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "unarchive".to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![
+                (IF_MATCH.clone(), if_match.to_string()),
+                (header_idempotency_key(), idempotency_key.to_string()),
+            ],
+            body: Some(&serde_json::json!({})),
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn list_work_item_links(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        opts: ListOptions,
+    ) -> Result<ApiResponse<WorkItemLinkList>, ClientError> {
+        let mut query = Vec::new();
+        push_list(&mut query, &opts);
+        self.send_json(RequestSpec {
+            method: Method::GET,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "work-items".to_string(),
+                key.to_string(),
+                "links".to_string(),
+            ],
+            query,
+            headers: Vec::new(),
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn create_work_item_link(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        body: &CreateWorkItemLinkRequest,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<WorkItemLink>, ClientError> {
+        let payload = serde_json::to_value(body)
+            .map_err(|err| ClientError::Protocol(format!("invalid request body: {err}")))?;
+        self.send_json(RequestSpec {
+            method: Method::POST,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "work-items".to_string(),
+                key.to_string(),
+                "links".to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![(header_idempotency_key(), idempotency_key.to_string())],
+            body: Some(&payload),
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn delete_work_item_link(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        link_id: &str,
+        idempotency_key: &str,
+    ) -> Result<(), ClientError> {
+        self.send_void(RequestSpec {
+            method: Method::DELETE,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "work-items".to_string(),
+                key.to_string(),
+                "links".to_string(),
+                link_id.to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![(header_idempotency_key(), idempotency_key.to_string())],
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn list_work_item_activity(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        opts: ActivityOptions,
+    ) -> Result<ApiResponse<ActivityList>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::GET,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "work-items".to_string(),
+                key.to_string(),
+                "activity".to_string(),
+            ],
+            query: activity_query(&opts),
+            headers: Vec::new(),
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn list_project_activity(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        opts: ActivityOptions,
+    ) -> Result<ApiResponse<ProjectActivityList>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::GET,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "activity".to_string(),
+            ],
+            query: activity_query(&opts),
+            headers: Vec::new(),
+            body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn delete_work_item(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        cascade: bool,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<(), ClientError> {
+        // The strict body is `{ "cascade": false }`; omitting the body has the
+        // same meaning, so we always send the explicit object.
+        let payload = serde_json::json!({ "cascade": cascade });
+        self.send_void(RequestSpec {
+            method: Method::DELETE,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "work-items".to_string(),
+                key.to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![
+                (IF_MATCH.clone(), if_match.to_string()),
+                (header_idempotency_key(), idempotency_key.to_string()),
+            ],
+            body: Some(&payload),
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn archive_work_item(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<WorkItem>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::POST,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "work-items".to_string(),
+                key.to_string(),
+                "archive".to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![
+                (IF_MATCH.clone(), if_match.to_string()),
+                (header_idempotency_key(), idempotency_key.to_string()),
+            ],
+            body: Some(&serde_json::json!({})),
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn unarchive_work_item(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        if_match: &str,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<WorkItem>, ClientError> {
+        self.send_json(RequestSpec {
+            method: Method::POST,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "work-items".to_string(),
+                key.to_string(),
+                "unarchive".to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![
+                (IF_MATCH.clone(), if_match.to_string()),
+                (header_idempotency_key(), idempotency_key.to_string()),
+            ],
+            body: Some(&serde_json::json!({})),
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn update_comment(
+        &self,
+        org_slug: &str,
+        project_key: &str,
+        key: &str,
+        comment_id: &str,
+        body: &UpdateCommentRequest,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<Comment>, ClientError> {
+        let payload = serde_json::to_value(body)
+            .map_err(|err| ClientError::Protocol(format!("invalid request body: {err}")))?;
+        self.send_json(RequestSpec {
+            method: Method::PATCH,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "projects".to_string(),
+                project_key.to_string(),
+                "work-items".to_string(),
+                key.to_string(),
+                "comments".to_string(),
+                comment_id.to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![(header_idempotency_key(), idempotency_key.to_string())],
+            body: Some(&payload),
+            // PATCH is never auto-retried.
+            retryable: false,
+        })
+        .await
+    }
+
+    async fn bulk_create_work_items(
+        &self,
+        org_slug: &str,
+        body: &BulkCreateEnvelope,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<BulkResultList>, ClientError> {
+        let payload = serde_json::to_value(body)
+            .map_err(|err| ClientError::Protocol(format!("invalid request body: {err}")))?;
+        self.send_json(RequestSpec {
+            method: Method::POST,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "bulk-work-items".to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![(header_idempotency_key(), idempotency_key.to_string())],
+            body: Some(&payload),
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn bulk_update_work_items(
+        &self,
+        org_slug: &str,
+        body: &BulkUpdateEnvelope,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<BulkResultList>, ClientError> {
+        let payload = serde_json::to_value(body)
+            .map_err(|err| ClientError::Protocol(format!("invalid request body: {err}")))?;
+        self.send_json(RequestSpec {
+            method: Method::PATCH,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "bulk-work-items".to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![(header_idempotency_key(), idempotency_key.to_string())],
+            body: Some(&payload),
+            // PATCH is never auto-retried.
+            retryable: false,
+        })
+        .await
+    }
+
+    async fn bulk_transition_work_items(
+        &self,
+        org_slug: &str,
+        body: &BulkTransitionEnvelope,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<BulkResultList>, ClientError> {
+        let payload = serde_json::to_value(body)
+            .map_err(|err| ClientError::Protocol(format!("invalid request body: {err}")))?;
+        self.send_json(RequestSpec {
+            method: Method::POST,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "bulk-work-item-transitions".to_string(),
+            ],
+            query: Vec::new(),
+            headers: vec![(header_idempotency_key(), idempotency_key.to_string())],
+            body: Some(&payload),
             retryable: true,
         })
         .await

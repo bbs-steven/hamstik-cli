@@ -11,6 +11,7 @@ pub mod label;
 pub mod org;
 pub mod project;
 pub mod sprint;
+pub mod user;
 pub mod work;
 
 use serde_json::Value;
@@ -29,6 +30,7 @@ pub async fn dispatch(session: &mut Session<'_>, command: &Command) -> Result<()
         Command::Sprint(args) => sprint::run(session, args).await,
         Command::Label(args) => label::run(session, args).await,
         Command::Work(args) => work::run(session, args).await,
+        Command::User(args) => user::run(session, args).await,
         Command::Doctor => doctor::run(session).await,
         Command::Completion(args) => completion::run(session, args),
         Command::Version => version(session),

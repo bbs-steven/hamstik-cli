@@ -7,14 +7,17 @@
 use serde_json::{Value, json};
 
 use hamstik_api_client::{
-    CreateCommentRequest, CreateWorkItemRequest, ListOptions, ListWorkItemsQuery, PageItems,
-    TransitionRequest, UpdateWorkItemRequest, WorkItem, follow_all, generate_key, validate_key,
+    ActivityOptions, BulkCreateEnvelope, BulkTransitionEnvelope, BulkUpdateEnvelope,
+    CreateCommentRequest, CreateWorkItemLinkRequest, CreateWorkItemRequest, ListOptions,
+    ListWorkItemsQuery, PageItems, TransitionRequest, UpdateCommentRequest, UpdateWorkItemRequest,
+    WorkItem, WorkItemSummary, follow_all, generate_key, validate_key,
 };
 
 use crate::app::Session;
 use crate::args::{
-    CommentArgs, CommentCommand, WorkArgs, WorkAttachmentArgs, WorkAttachmentCommand, WorkCommand,
-    WorkCreateArgs, WorkEditArgs, WorkLabelArgs, WorkLabelCommand, WorkListArgs,
+    CommentArgs, CommentCommand, WorkArgs, WorkAttachmentArgs, WorkAttachmentCommand, WorkBulkArgs,
+    WorkBulkCommand, WorkCommand, WorkCreateArgs, WorkEditArgs, WorkLabelArgs, WorkLabelCommand,
+    WorkLinkArgs, WorkLinkCommand, WorkListArgs,
 };
 use crate::error::CliError;
 use crate::input::resolve_text;
@@ -38,57 +41,74 @@ pub async fn run(session: &mut Session<'_>, args: &WorkArgs) -> Result<(), CliEr
         WorkCommand::Label(label_args) => label(session, label_args).await,
         WorkCommand::Attachment(attachment_args) => attachment(session, attachment_args).await,
         WorkCommand::Comment(comment_args) => comment(session, comment_args).await,
+        WorkCommand::Link(link_args) => link(session, link_args).await,
+        WorkCommand::Activity {
+            key,
+            since,
+            pagination,
+        } => activity(session, key, since.as_deref(), pagination).await,
+        WorkCommand::Archive {
+            key,
+            force,
+            idempotency_key,
+        } => change_archive(session, key, true, *force, idempotency_key.as_deref()).await,
+        WorkCommand::Unarchive {
+            key,
+            force,
+            idempotency_key,
+        } => change_archive(session, key, false, *force, idempotency_key.as_deref()).await,
+        WorkCommand::Delete {
+            key,
+            cascade,
+            force,
+            idempotency_key,
+        } => delete(session, key, *cascade, *force, idempotency_key.as_deref()).await,
+        WorkCommand::Bulk(bulk_args) => bulk(session, bulk_args).await,
     }
 }
 
-fn idem_key(flag: Option<String>) -> Result<String, CliError> {
-    match flag {
-        Some(key) => {
-            validate_key(&key).map_err(|err| CliError::usage(err.to_string()))?;
-            Ok(key)
-        }
-        None => Ok(generate_key()),
-    }
-}
-
-fn read_text(inline: Option<String>, file: Option<&str>) -> Result<Option<String>, CliError> {
-    let mut stdin = std::io::stdin();
-    resolve_text(inline, file, &mut stdin)
-        .map_err(|err| CliError::general(format!("cannot read text: {err}")))
+/// Applies the shared Work Item filters to a query.
+pub(crate) fn apply_filters(query: &mut ListWorkItemsQuery, filters: &crate::args::WorkFilters) {
+    query.q = filters.search.clone();
+    query.status = filters
+        .status
+        .iter()
+        .map(|s| s.as_str().to_string())
+        .collect();
+    query.scope = filters.scope.map(|s| s.as_str().to_string());
+    query.item_type = filters
+        .item_type
+        .iter()
+        .map(|t| t.as_str().to_string())
+        .collect();
+    query.priority = filters
+        .priority
+        .iter()
+        .map(|p| p.as_str().to_string())
+        .collect();
+    query.assignee = filters.assignee_query();
+    query.sprint = filters.sprint.clone();
+    query.label = filters.label.clone();
+    query.label_name = filters.label_name.clone();
+    query.parent = filters.parent.clone();
+    query.top_level = if filters.top_level { Some(true) } else { None };
+    query.updated_after = filters.updated_after.clone();
+    query.overdue = filters.overdue;
+    query.due_before = filters.due_before.clone();
+    query.due_after = filters.due_after.clone();
+    query.sort = filters.sort.map(|s| s.as_str().to_string());
+    query.archived = filters.archived;
+    query.fields = filters.fields.clone();
 }
 
 fn build_query(args: &WorkListArgs) -> ListWorkItemsQuery {
-    let assignee = args.assignee.clone().or_else(|| {
-        if args.mine {
-            Some("me".to_string())
-        } else {
-            None
-        }
-    });
-    ListWorkItemsQuery {
+    let mut query = ListWorkItemsQuery {
         limit: args.pagination.limit,
         cursor: args.pagination.cursor.clone(),
-        q: args.search.clone(),
-        status: args.status.iter().map(|s| s.as_str().to_string()).collect(),
-        scope: args.scope.map(|s| s.as_str().to_string()),
-        item_type: args
-            .item_type
-            .iter()
-            .map(|t| t.as_str().to_string())
-            .collect(),
-        priority: args
-            .priority
-            .iter()
-            .map(|p| p.as_str().to_string())
-            .collect(),
-        assignee,
-        sprint: args.sprint.clone(),
-        label: args.label.clone(),
-        label_name: args.label_name.clone(),
-        parent: args.parent.clone(),
-        top_level: if args.top_level { Some(true) } else { None },
-        updated_after: args.updated_after.clone(),
-    }
+        ..Default::default()
+    };
+    apply_filters(&mut query, &args.filters);
+    query
 }
 
 async fn list(session: &mut Session<'_>, args: &WorkListArgs) -> Result<(), CliError> {
@@ -143,16 +163,52 @@ async fn list(session: &mut Session<'_>, args: &WorkListArgs) -> Result<(), CliE
     }
 }
 
-fn summary_row(item: &hamstik_api_client::WorkItemSummary) -> Vec<String> {
+fn idem_key(flag: Option<String>) -> Result<String, CliError> {
+    match flag {
+        Some(key) => {
+            validate_key(&key).map_err(|err| CliError::usage(err.to_string()))?;
+            Ok(key)
+        }
+        None => Ok(generate_key()),
+    }
+}
+
+fn idem_key_ref(flag: Option<&str>) -> Result<String, CliError> {
+    match flag {
+        Some(key) => {
+            validate_key(key).map_err(|err| CliError::usage(err.to_string()))?;
+            Ok(key.to_string())
+        }
+        None => Ok(generate_key()),
+    }
+}
+
+fn read_text(inline: Option<String>, file: Option<&str>) -> Result<Option<String>, CliError> {
+    let mut stdin = std::io::stdin();
+    resolve_text(inline, file, &mut stdin)
+        .map_err(|err| CliError::general(format!("cannot read text: {err}")))
+}
+
+/// Resolves the `--assignee` value into the preferred wire form: a `usr_`
+/// public ID goes to `assigneePublicId`, everything else to legacy
+/// `assigneeId` (UUID, `me`, or `none`).
+fn assignee_fields(value: &Option<String>) -> (Option<String>, Option<String>) {
+    match value {
+        Some(id) if id.starts_with("usr_") => (None, Some(id.clone())),
+        other => (other.clone(), None),
+    }
+}
+
+fn summary_row(item: &WorkItemSummary) -> Vec<String> {
     vec![
         item.key.clone(),
-        item.title.clone(),
-        item.status.clone(),
-        item.item_type.clone(),
-        item.priority.clone(),
+        item.title.clone().unwrap_or_default(),
+        item.status.clone().unwrap_or_default(),
+        item.item_type.clone().unwrap_or_default(),
+        item.priority.clone().unwrap_or_default(),
         item.assignee
             .clone()
-            .map(|a| a.name)
+            .map(|a| a.name().to_string())
             .unwrap_or_else(|| "-".to_string()),
     ]
 }
@@ -183,7 +239,7 @@ fn render_work_item(session: &mut Session<'_>, item: &WorkItem) -> Result<(), Cl
             "assignee",
             item.assignee
                 .clone()
-                .map(|a| a.name)
+                .map(|a| a.name().to_string())
                 .unwrap_or_else(|| "-".to_string()),
         ),
         (
@@ -238,14 +294,15 @@ async fn create(session: &mut Session<'_>, args: &WorkCreateArgs) -> Result<(), 
     }
 
     let description = read_text(args.description.clone(), args.description_file.as_deref())?;
-
+    let (assignee_id, assignee_public_id) = assignee_fields(&args.assignee);
     let body = CreateWorkItemRequest {
         title,
         description,
         item_type: args.item_type.map(|t| t.as_str().to_string()),
         status: args.status.map(|s| s.as_str().to_string()),
         priority: args.priority.map(|p| p.as_str().to_string()),
-        assignee_id: args.assignee.clone(),
+        assignee_id,
+        assignee_public_id,
         sprint_id: args.sprint.clone(),
         parent_id: args.parent.clone(),
         story_points: args.story_points,
@@ -280,13 +337,29 @@ async fn edit(session: &mut Session<'_>, args: &WorkEditArgs) -> Result<(), CliE
     } else {
         read_text(args.description.clone(), args.description_file.as_deref())?.map(Some)
     };
+    // A public ID (`usr_...`) must go to `assigneePublicId`; everything else
+    // (legacy UUID) goes to `assigneeId`. Clearing targets whichever field the
+    // caller named.
+    let (assignee_id, assignee_public_id) = if args.clear_assignee {
+        match &args.assignee {
+            Some(id) if id.starts_with("usr_") => (None, Some(None)),
+            _ => (Some(None), None),
+        }
+    } else {
+        match &args.assignee {
+            Some(id) if id.starts_with("usr_") => (None, Some(Some(id.clone()))),
+            Some(id) => (Some(Some(id.clone())), None),
+            None => (None, None),
+        }
+    };
 
     let body = UpdateWorkItemRequest {
         title: args.title.clone(),
         description,
         item_type: args.item_type.map(|t| t.as_str().to_string()),
         priority: args.priority.map(|p| p.as_str().to_string()),
-        assignee_id: tri(args.clear_assignee, args.assignee.clone()),
+        assignee_id,
+        assignee_public_id,
         sprint_id: tri(args.clear_sprint, args.sprint.clone()),
         parent_id: tri(args.clear_parent, args.parent.clone()),
         story_points: tri(args.clear_story_points, args.story_points),
@@ -525,7 +598,7 @@ async fn attachment(session: &mut Session<'_>, args: &WorkAttachmentArgs) -> Res
                         a.size.to_string(),
                         a.created_by
                             .clone()
-                            .map(|u| u.name)
+                            .map(|u| u.name().to_string())
                             .unwrap_or_else(|| "-".to_string()),
                         a.created_at.clone(),
                     ]
@@ -657,7 +730,7 @@ fn render_attachment(
             attachment
                 .created_by
                 .clone()
-                .map(|u| u.name)
+                .map(|u| u.name().to_string())
                 .unwrap_or_else(|| "-".to_string()),
         ),
         ("created", attachment.created_at.clone()),
@@ -724,7 +797,7 @@ async fn comment(session: &mut Session<'_>, args: &CommentArgs) -> Result<(), Cl
                 .map(|c| {
                     let body = c.body.clone().unwrap_or_else(|| "(deleted)".to_string());
                     let preview: String = body.chars().take(60).collect();
-                    vec![c.author.name.clone(), c.created_at.clone(), preview]
+                    vec![c.author.name().to_string(), c.created_at.clone(), preview]
                 })
                 .collect();
             emit_table(
@@ -775,6 +848,44 @@ async fn comment(session: &mut Session<'_>, args: &CommentArgs) -> Result<(), Cl
                 render_comment(session, &response.raw)
             })
         }
+        CommentCommand::Edit {
+            key,
+            comment_id,
+            body,
+            body_file,
+            idempotency_key,
+        } => {
+            let selection = session.selection()?;
+            let org = session.require_org(&selection)?;
+            let project = session.require_project(&selection)?;
+            let text = read_text(body.clone(), body_file.as_deref())?.ok_or_else(|| {
+                CliError::usage("missing comment body; use --body or --body-file")
+            })?;
+            if text.trim().is_empty() {
+                return Err(CliError::usage("comment body must not be empty"));
+            }
+            let idempotency = idem_key(idempotency_key.clone())?;
+            let api = session.api(&selection)?;
+            let response = api
+                .update_comment(
+                    &org,
+                    &project,
+                    key,
+                    comment_id,
+                    &UpdateCommentRequest { body: text },
+                    &idempotency,
+                )
+                .await
+                .map_err(CliError::from_client)?;
+            if response.idempotency_replayed {
+                session
+                    .out
+                    .warn("note: request replayed (idempotent duplicate)");
+            }
+            emit_view(session, &response.raw, comment_id, |session| {
+                render_comment(session, &response.raw)
+            })
+        }
         CommentCommand::Delete { key, comment_id } => {
             let selection = session.selection()?;
             let org = session.require_org(&selection)?;
@@ -796,6 +907,530 @@ async fn comment(session: &mut Session<'_>, args: &CommentArgs) -> Result<(), Cl
             }
         }
     }
+}
+
+async fn link(session: &mut Session<'_>, args: &WorkLinkArgs) -> Result<(), CliError> {
+    match &args.command {
+        WorkLinkCommand::List { key, pagination } => {
+            let selection = session.selection()?;
+            let org = session.require_org(&selection)?;
+            let project = session.require_project(&selection)?;
+            let api = session.api(&selection)?;
+            let response = list_links(api, &org, &project, key, pagination).await?;
+            let rows: Vec<Vec<String>> = response
+                .value
+                .items
+                .iter()
+                .map(|l| {
+                    vec![
+                        l.id.clone(),
+                        l.relation.clone(),
+                        l.other_work_item.key.clone(),
+                        l.other_work_item.title.clone(),
+                        l.created_by
+                            .as_ref()
+                            .map(|u| u.name().to_string())
+                            .unwrap_or_else(|| "-".to_string()),
+                    ]
+                })
+                .collect();
+            emit_table(
+                session,
+                &response.raw,
+                &["ID", "RELATION", "OTHER", "TITLE", "BY"],
+                &rows,
+            )
+        }
+        WorkLinkCommand::Add {
+            key,
+            target_key,
+            target_id,
+            relation,
+            idempotency_key,
+        } => {
+            let selection = session.selection()?;
+            let org = session.require_org(&selection)?;
+            let project = session.require_project(&selection)?;
+            let api = session.api(&selection)?;
+            let idempotency = idem_key(idempotency_key.clone())?;
+            let response = api
+                .create_work_item_link(
+                    &org,
+                    &project,
+                    key,
+                    &CreateWorkItemLinkRequest {
+                        target_id: target_id.clone(),
+                        target_key: target_key.clone(),
+                        relation: relation.as_str().to_string(),
+                    },
+                    &idempotency,
+                )
+                .await
+                .map_err(CliError::from_client)?;
+            if response.idempotency_replayed {
+                session
+                    .out
+                    .warn("note: request replayed (idempotent duplicate)");
+            }
+            let link = response.value.clone();
+            emit_view(session, &response.raw, &link.id.clone(), |session| {
+                render_link(session, &link)
+            })
+        }
+        WorkLinkCommand::Delete {
+            key,
+            link_id,
+            idempotency_key,
+        } => {
+            let selection = session.selection()?;
+            let org = session.require_org(&selection)?;
+            let project = session.require_project(&selection)?;
+            let api = session.api(&selection)?;
+            let idempotency = idem_key(idempotency_key.clone())?;
+            api.delete_work_item_link(&org, &project, key, link_id, &idempotency)
+                .await
+                .map_err(CliError::from_client)?;
+            if session.json() {
+                emit_json(session, &json!({ "deleted": true, "linkId": link_id }))
+            } else {
+                session
+                    .out
+                    .line(&format!("Deleted link {link_id}"))
+                    .map_err(CliError::general)
+            }
+        }
+    }
+}
+
+async fn list_links(
+    api: std::sync::Arc<dyn hamstik_api_client::HamstikApi>,
+    org: &str,
+    project: &str,
+    key: &str,
+    pagination: &crate::args::PaginationArgs,
+) -> Result<hamstik_api_client::ApiResponse<hamstik_api_client::WorkItemLinkList>, CliError> {
+    let opts = ListOptions {
+        limit: pagination.limit,
+        cursor: pagination.cursor.clone(),
+    };
+    if pagination.all {
+        let fetch_api = api.clone();
+        let org = org.to_string();
+        let project = project.to_string();
+        let key = key.to_string();
+        let page = follow_all(move |cursor| {
+            let fetch_api = fetch_api.clone();
+            let org = org.clone();
+            let project = project.clone();
+            let key = key.to_string();
+            async move {
+                let response = fetch_api
+                    .list_work_item_links(
+                        &org,
+                        &project,
+                        &key,
+                        ListOptions {
+                            limit: None,
+                            cursor,
+                        },
+                    )
+                    .await?;
+                Ok(PageItems::new(
+                    response.value.items,
+                    &response.raw,
+                    response.value.page,
+                ))
+            }
+        })
+        .await
+        .map_err(CliError::from_client)?;
+        Ok(hamstik_api_client::ApiResponse {
+            value: hamstik_api_client::WorkItemLinkList {
+                items: page.items,
+                page: page.page.clone(),
+            },
+            raw: json!({ "items": page.raw_items, "page": page.page }),
+            request_id: None,
+            etag: None,
+            idempotency_replayed: false,
+        })
+    } else {
+        api.list_work_item_links(org, project, key, opts)
+            .await
+            .map_err(CliError::from_client)
+    }
+}
+
+fn render_link(
+    session: &mut Session<'_>,
+    link: &hamstik_api_client::WorkItemLink,
+) -> Result<(), CliError> {
+    let lines = [
+        ("id", link.id.clone()),
+        ("relation", link.relation.clone()),
+        ("other", link.other_work_item.key.clone()),
+        ("title", link.other_work_item.title.clone()),
+        ("project", link.other_work_item.project.key.clone()),
+        (
+            "created by",
+            link.created_by
+                .as_ref()
+                .map(|u| u.name().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        ("created", link.created_at.clone()),
+    ];
+    render_lines(session, &lines)
+}
+
+async fn activity(
+    session: &mut Session<'_>,
+    key: &str,
+    since: Option<&str>,
+    pagination: &crate::args::PaginationArgs,
+) -> Result<(), CliError> {
+    let selection = session.selection()?;
+    let org = session.require_org(&selection)?;
+    let project = session.require_project(&selection)?;
+    let api = session.api(&selection)?;
+    let opts = ActivityOptions {
+        limit: pagination.limit,
+        cursor: pagination.cursor.clone(),
+        since: since.map(str::to_string),
+    };
+    let json_value: Value = if pagination.all {
+        let fetch_api = api.clone();
+        let org = org.clone();
+        let project = project.clone();
+        let key = key.to_string();
+        let since = opts.since.clone();
+        let page = follow_all(move |cursor| {
+            let fetch_api = fetch_api.clone();
+            let org = org.clone();
+            let project = project.clone();
+            let key = key.clone();
+            let since = since.clone();
+            async move {
+                let opts = ActivityOptions {
+                    limit: None,
+                    cursor,
+                    since: since.clone(),
+                };
+                let response = fetch_api
+                    .list_work_item_activity(&org, &project, &key, opts)
+                    .await?;
+                Ok(PageItems::new(
+                    response.value.items,
+                    &response.raw,
+                    response.value.page,
+                ))
+            }
+        })
+        .await
+        .map_err(CliError::from_client)?;
+        json!({ "items": page.raw_items, "page": page.page })
+    } else {
+        let response = api
+            .list_work_item_activity(&org, &project, key, opts)
+            .await
+            .map_err(CliError::from_client)?;
+        response.raw
+    };
+    let rows: Vec<Vec<String>> = json_value
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().map(activity_row_from_raw).collect())
+        .unwrap_or_default();
+    emit_table(
+        session,
+        &json_value,
+        &["ID", "ACTION", "ACTOR", "DETAIL", "CREATED"],
+        &rows,
+    )
+}
+
+fn activity_row_from_raw(raw: &Value) -> Vec<String> {
+    let detail = raw
+        .get("detail")
+        .filter(|d| !d.is_null())
+        .map(Value::to_string)
+        .unwrap_or_else(|| "-".to_string());
+    vec![
+        raw.get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        raw.get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        raw.get("actor")
+            .and_then(|a| a.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string(),
+        detail,
+        raw.get("createdAt")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    ]
+}
+
+/// Archives (or unarchives) a Work Item with the Work Item ETag.
+async fn change_archive(
+    session: &mut Session<'_>,
+    key: &str,
+    archived: bool,
+    force: bool,
+    idempotency_key: Option<&str>,
+) -> Result<(), CliError> {
+    let selection = session.selection()?;
+    let org = session.require_org(&selection)?;
+    let project = session.require_project(&selection)?;
+    let api = session.api(&selection)?;
+
+    let if_match = if force {
+        "*".to_string()
+    } else {
+        let current = api
+            .get_work_item(&org, &project, key)
+            .await
+            .map_err(CliError::from_client)?;
+        current.etag.ok_or_else(|| {
+            CliError::protocol("server did not return an ETag; re-run with --force")
+        })?
+    };
+    let idempotency = idem_key_ref(idempotency_key)?;
+
+    let response = if archived {
+        api.archive_work_item(&org, &project, key, &if_match, &idempotency)
+            .await
+            .map_err(CliError::from_client)?
+    } else {
+        api.unarchive_work_item(&org, &project, key, &if_match, &idempotency)
+            .await
+            .map_err(CliError::from_client)?
+    };
+    if response.idempotency_replayed {
+        session
+            .out
+            .warn("note: request replayed (idempotent duplicate)");
+    }
+    let item = response.value.clone();
+    emit_view(session, &response.raw, &item.key.clone(), |session| {
+        render_work_item(session, &item)
+    })
+}
+
+/// Soft-deletes a Work Item (Organization owner only).
+async fn delete(
+    session: &mut Session<'_>,
+    key: &str,
+    cascade: bool,
+    force: bool,
+    idempotency_key: Option<&str>,
+) -> Result<(), CliError> {
+    let selection = session.selection()?;
+    let org = session.require_org(&selection)?;
+    let project = session.require_project(&selection)?;
+    let api = session.api(&selection)?;
+
+    let if_match = if force {
+        "*".to_string()
+    } else {
+        let current = api
+            .get_work_item(&org, &project, key)
+            .await
+            .map_err(CliError::from_client)?;
+        current.etag.ok_or_else(|| {
+            CliError::protocol("server did not return an ETag; re-run with --force")
+        })?
+    };
+    let idempotency = idem_key_ref(idempotency_key)?;
+
+    api.delete_work_item(&org, &project, key, cascade, &if_match, &idempotency)
+        .await
+        .map_err(CliError::from_client)?;
+    if session.json() {
+        emit_json(
+            session,
+            &json!({ "deleted": true, "key": key, "cascade": cascade }),
+        )
+    } else {
+        session
+            .out
+            .line(&format!("Deleted work item {key}"))
+            .map_err(CliError::general)
+    }
+}
+
+/// Reads the bulk operations JSON payload (path or `-` for stdin), capped.
+fn read_operations(path: &str) -> Result<Vec<Value>, CliError> {
+    const MAX_OPERATIONS_BYTES: usize = 1024 * 1024;
+    let text = if path == "-" {
+        use std::io::Read;
+        let mut buffer = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buffer)
+            .map_err(|err| CliError::usage(format!("cannot read stdin: {err}")))?;
+        buffer
+    } else {
+        let metadata = std::fs::metadata(path)
+            .map_err(|err| CliError::usage(format!("cannot read {path}: {err}")))?;
+        if metadata.len() > MAX_OPERATIONS_BYTES as u64 {
+            return Err(CliError::usage(format!(
+                "operations file exceeds the {MAX_OPERATIONS_BYTES} byte limit"
+            )));
+        }
+        std::fs::read_to_string(path)
+            .map_err(|err| CliError::usage(format!("cannot read {path}: {err}")))?
+    };
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|err| CliError::usage(format!("operations must be a JSON array: {err}")))?;
+    let items = value
+        .as_array()
+        .ok_or_else(|| CliError::usage("operations must be a JSON array"))?
+        .clone();
+    if items.is_empty() || items.len() > 50 {
+        return Err(CliError::usage(
+            "bulk requests accept between 1 and 50 operations",
+        ));
+    }
+    Ok(items)
+}
+
+async fn bulk(session: &mut Session<'_>, args: &WorkBulkArgs) -> Result<(), CliError> {
+    let selection = session.selection()?;
+    let org = session.require_org(&selection)?;
+    let api = session.api(&selection)?;
+    let idempotency = idem_key(args_idempotency(&args.command))?;
+
+    let response = match &args.command {
+        WorkBulkCommand::Create {
+            operations_file, ..
+        } => {
+            let body = BulkCreateEnvelope {
+                operations: read_operations(operations_file)?,
+            };
+            api.bulk_create_work_items(&org, &body, &idempotency)
+                .await
+                .map_err(CliError::from_client)?
+        }
+        WorkBulkCommand::Update {
+            operations_file,
+            concurrency,
+            ..
+        } => {
+            let body = BulkUpdateEnvelope {
+                concurrency: concurrency.map(|c| c.as_str().to_string()),
+                operations: read_operations(operations_file)?,
+            };
+            api.bulk_update_work_items(&org, &body, &idempotency)
+                .await
+                .map_err(CliError::from_client)?
+        }
+        WorkBulkCommand::Transition {
+            operations_file,
+            concurrency,
+            ..
+        } => {
+            let body = BulkTransitionEnvelope {
+                concurrency: concurrency.map(|c| c.as_str().to_string()),
+                operations: read_operations(operations_file)?,
+            };
+            api.bulk_transition_work_items(&org, &body, &idempotency)
+                .await
+                .map_err(CliError::from_client)?
+        }
+    };
+    if response.idempotency_replayed {
+        session
+            .out
+            .warn("note: request replayed (idempotent duplicate)");
+    }
+    render_bulk(session, &response.raw)
+}
+
+fn args_idempotency(command: &WorkBulkCommand) -> Option<String> {
+    match command {
+        WorkBulkCommand::Create {
+            idempotency_key, ..
+        }
+        | WorkBulkCommand::Update {
+            idempotency_key, ..
+        }
+        | WorkBulkCommand::Transition {
+            idempotency_key, ..
+        } => idempotency_key.clone(),
+    }
+}
+
+/// Renders bulk results: the raw `{results: [...]}` body in JSON mode, a
+/// per-item table in human mode, or a compact success/error listing in quiet.
+fn render_bulk(session: &mut Session<'_>, raw: &Value) -> Result<(), CliError> {
+    if session.json() {
+        return emit_json(session, raw);
+    }
+    let results = raw
+        .get("results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if session.out.is_quiet() {
+        for result in &results {
+            let index = result.get("index").and_then(Value::as_i64).unwrap_or(0);
+            let status = result.get("status").and_then(Value::as_i64).unwrap_or(0);
+            if let Some(error) = result.get("error").filter(|e| !e.is_null()) {
+                let code = error
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or("UNKNOWN");
+                session
+                    .out
+                    .line(&format!("{index}\t{status}\t{code}"))
+                    .map_err(CliError::general)?;
+            } else {
+                let key = result
+                    .get("workItem")
+                    .and_then(|w| w.get("key"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                session
+                    .out
+                    .line(&format!("{index}\t{status}\t{key}"))
+                    .map_err(CliError::general)?;
+            }
+        }
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = results
+        .iter()
+        .map(|result| {
+            let index = result.get("index").and_then(Value::as_i64).unwrap_or(0);
+            let status = result.get("status").and_then(Value::as_i64).unwrap_or(0);
+            let outcome = if let Some(error) = result.get("error").filter(|e| !e.is_null()) {
+                let code = error
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or("UNKNOWN");
+                let message = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                format!("{code}: {message}")
+            } else {
+                result
+                    .get("workItem")
+                    .and_then(|w| w.get("key"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("-")
+                    .to_string()
+            };
+            vec![index.to_string(), status.to_string(), outcome]
+        })
+        .collect();
+    emit_table(session, raw, &["INDEX", "STATUS", "OUTCOME"], &rows)
 }
 
 fn render_comment(session: &mut Session<'_>, raw: &Value) -> Result<(), CliError> {

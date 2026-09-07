@@ -1,16 +1,20 @@
 // Copyright 2026 Blackboard Studios
 // SPDX-License-Identifier: Apache-2.0
 
-//! `hamstik org` (list / view / use).
+//! `hamstik org` (list / view / members / work / use).
 
-use serde_json::json;
+use serde_json::{Value, json};
 
-use hamstik_api_client::{ListOptions, OrganizationListItem, PageItems, follow_all};
+use hamstik_api_client::{
+    ListOptions, ListOrganizationUsersOptions, ListWorkItemsQuery, OrganizationListItem, PageItems,
+    follow_all,
+};
 
 use crate::app::Session;
-use crate::args::{OrgArgs, OrgCommand, PaginationArgs};
+use crate::args::{OrgArgs, OrgCommand, OrgWorkListArgs, PaginationArgs};
 use crate::error::CliError;
 
+use super::work::apply_filters as apply_work_filters;
 use super::{emit_json, emit_table, emit_view};
 
 /// Runs the `org` subcommands.
@@ -18,6 +22,12 @@ pub async fn run(session: &mut Session<'_>, args: &OrgArgs) -> Result<(), CliErr
     match &args.command {
         OrgCommand::List(pagination) => list(session, pagination).await,
         OrgCommand::View { slug } => view(session, slug).await,
+        OrgCommand::Members {
+            slug,
+            search,
+            pagination,
+        } => members(session, slug, search.as_deref(), pagination).await,
+        OrgCommand::Work(work_args) => work(session, work_args).await,
         OrgCommand::Use { slug } => use_org(session, slug).await,
     }
 }
@@ -138,6 +148,192 @@ async fn use_org(session: &mut Session<'_>, slug: &str) -> Result<(), CliError> 
             ))
             .map_err(CliError::general)
     }
+}
+
+async fn members(
+    session: &mut Session<'_>,
+    slug: &str,
+    search: Option<&str>,
+    pagination: &PaginationArgs,
+) -> Result<(), CliError> {
+    let selection = session.selection()?;
+    let api = session.api(&selection)?;
+    let base = ListOrganizationUsersOptions {
+        limit: pagination.limit,
+        cursor: pagination.cursor.clone(),
+        q: search.map(str::to_string),
+    };
+    let json_value: Value = if pagination.all {
+        let fetch_api = api.clone();
+        let page = follow_all(move |cursor| {
+            let fetch_api = fetch_api.clone();
+            let mut opts = base.clone();
+            opts.cursor = cursor;
+            async move {
+                let response = fetch_api.list_organization_users(slug, opts).await?;
+                Ok(PageItems::new(
+                    response.value.items,
+                    &response.raw,
+                    response.value.page,
+                ))
+            }
+        })
+        .await
+        .map_err(CliError::from_client)?;
+        json!({ "items": page.raw_items, "page": page.page })
+    } else {
+        let response = api
+            .list_organization_users(slug, base)
+            .await
+            .map_err(CliError::from_client)?;
+        response.raw
+    };
+    let rows: Vec<Vec<String>> = json_value
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    vec![
+                        item.get("publicId")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        item.get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        item.get("username")
+                            .and_then(Value::as_str)
+                            .unwrap_or("-")
+                            .to_string(),
+                    ]
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    emit_table(
+        session,
+        &json_value,
+        &["PUBLIC ID", "NAME", "USERNAME"],
+        &rows,
+    )
+}
+
+async fn work(session: &mut Session<'_>, args: &OrgWorkListArgs) -> Result<(), CliError> {
+    let selection = session.selection()?;
+    let org = session.require_org(&selection)?;
+    let api = session.api(&selection)?;
+    let mut query = ListWorkItemsQuery {
+        limit: args.pagination.limit,
+        cursor: args.pagination.cursor.clone(),
+        ..Default::default()
+    };
+    apply_work_filters(&mut query, &args.filters);
+    query.projects = args.project.clone();
+
+    let json_value: Value = if args.pagination.all {
+        let fetch_api = api.clone();
+        let org = org.clone();
+        let base = query.clone();
+        let page = follow_all(move |cursor| {
+            let fetch_api = fetch_api.clone();
+            let org = org.clone();
+            let mut query = base.clone();
+            query.cursor = cursor;
+            async move {
+                let response = fetch_api.list_organization_work_items(&org, query).await?;
+                Ok(PageItems::new(
+                    response.value.items,
+                    &response.raw,
+                    response.value.page,
+                ))
+            }
+        })
+        .await
+        .map_err(CliError::from_client)?;
+        json!({ "items": page.raw_items, "page": page.page })
+    } else {
+        let response = api
+            .list_organization_work_items(&org, query)
+            .await
+            .map_err(CliError::from_client)?;
+        response.raw
+    };
+    let color = session.color_enabled();
+    let truecolor = session.truecolor_enabled();
+    let rows: Vec<Vec<String>> = json_value
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    let key = item.get("key").and_then(Value::as_str).unwrap_or_default();
+                    let title = item
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let status = item
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let project_key = item
+                        .get("project")
+                        .and_then(|p| p.get("key"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let assignee = item
+                        .get("assignee")
+                        .filter(|a| !a.is_null())
+                        .and_then(|a| a.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("-");
+                    let project_color = item
+                        .get("project")
+                        .and_then(|p| p.get("color"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    vec![
+                        key.to_string(),
+                        project_key.to_string(),
+                        title.to_string(),
+                        status.to_string(),
+                        assignee.to_string(),
+                        crate::palette::color_cell(color, project_color, truecolor),
+                    ]
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    emit_table(
+        session,
+        &json_value,
+        &["KEY", "PROJECT", "TITLE", "STATUS", "ASSIGNEE", "COLOR"],
+        &rows,
+    )
+}
+
+/// Renders a decoded context row (kept for potential reuse by `user work`).
+#[allow(dead_code)]
+pub(crate) fn context_row(
+    item: &hamstik_api_client::WorkItemContextSummary,
+    color: bool,
+    truecolor: bool,
+) -> Vec<String> {
+    vec![
+        item.summary.key.clone(),
+        item.project.key.clone(),
+        item.summary.title.clone().unwrap_or_default(),
+        item.summary.status.clone().unwrap_or_default(),
+        item.summary
+            .assignee
+            .clone()
+            .map(|a| a.name().to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        crate::palette::color_cell(color, &item.project.color, truecolor),
+    ]
 }
 
 pub(crate) fn render_lines(

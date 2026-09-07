@@ -198,7 +198,12 @@ fn exit_code_for_api_code(code: &str, status: u16) -> i32 {
         | "INVALID_SPRINT_TRANSITION"
         | "ACTIVE_SPRINT_EXISTS"
         | "SPRINT_HAS_UNFINISHED_WORK_ITEMS"
-        | "INVALID_COMPLETION_TARGET" => exit::CONFLICT,
+        | "INVALID_COMPLETION_TARGET"
+        | "LINK_DUPLICATE"
+        | "LINK_CONTRADICTION"
+        | "WORK_ITEM_ARCHIVED"
+        | "WORK_ITEM_HAS_CHILDREN"
+        | "PROJECT_ARCHIVED" => exit::CONFLICT,
         "RATE_LIMITED" => exit::RATE_LIMITED,
         "VALIDATION_ERROR" | "INVALID_CURSOR" | "PAYLOAD_TOO_LARGE" | "PRECONDITION_REQUIRED" => {
             exit::USAGE
@@ -235,6 +240,14 @@ mod tests {
         assert_eq!(api("RATE_LIMITED", 429).exit_code(), exit::RATE_LIMITED);
         assert_eq!(api("VALIDATION_ERROR", 400).exit_code(), exit::USAGE);
         assert_eq!(api("INTERNAL_ERROR", 500).exit_code(), exit::SERVER);
+        assert_eq!(api("LINK_DUPLICATE", 409).exit_code(), exit::CONFLICT);
+        assert_eq!(api("LINK_CONTRADICTION", 409).exit_code(), exit::CONFLICT);
+        assert_eq!(api("WORK_ITEM_ARCHIVED", 409).exit_code(), exit::CONFLICT);
+        assert_eq!(
+            api("WORK_ITEM_HAS_CHILDREN", 409).exit_code(),
+            exit::CONFLICT
+        );
+        assert_eq!(api("PROJECT_ARCHIVED", 409).exit_code(), exit::CONFLICT);
     }
 
     #[test]

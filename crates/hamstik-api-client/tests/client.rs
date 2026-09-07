@@ -13,7 +13,8 @@ use std::time::Duration;
 use hamstik_api_client::retry::NoopSleeper;
 use hamstik_api_client::{
     ClientConfig, CreateCommentRequest, CreateWorkItemRequest, HamstikApi, HamstikClient,
-    ListOptions, PageItems, RetryPolicy, TransitionRequest, UpdateWorkItemRequest, follow_all,
+    ListOptions, ListProjectsOptions, PageItems, RetryPolicy, TransitionRequest,
+    UpdateWorkItemRequest, follow_all,
 };
 use secrecy::SecretString;
 use serde_json::json;
@@ -347,10 +348,10 @@ async fn follows_all_pages_through_trait() {
         .respond_with(|req: &Request| {
             let has_cursor = req.url.query().unwrap_or_default().contains("cursor=next");
             let body = if has_cursor {
-                json!({"items":[{"id":"2","organizationId":"o","key":"B","name":"B","description":null,"color":"#000","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],
+                json!({"items":[{"id":"2","organizationId":"o","key":"B","name":"B","description":null,"color":"#000","revision":1,"archivedAt":null,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],
                         "page":{"limit":1,"hasMore":false,"nextCursor":null}})
             } else {
-                json!({"items":[{"id":"1","organizationId":"o","key":"A","name":"A","description":null,"color":"#000","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],
+                json!({"items":[{"id":"1","organizationId":"o","key":"A","name":"A","description":null,"color":"#000","revision":1,"archivedAt":null,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],
                         "page":{"limit":1,"hasMore":true,"nextCursor":"next"}})
             };
             ResponseTemplate::new(200).set_body_json(body)
@@ -362,9 +363,10 @@ async fn follows_all_pages_through_trait() {
     let collected = follow_all(|cursor| {
         let client = client.clone();
         async move {
-            let opts = ListOptions {
+            let opts = ListProjectsOptions {
                 limit: Some(1),
                 cursor,
+                archived: None,
             };
             let resp = client.list_projects("acme", opts).await?;
             Ok(PageItems::new(resp.value.items, &resp.raw, resp.value.page))
@@ -505,7 +507,7 @@ async fn creates_project_with_idempotency_key() {
         .and(path("/api/v1/organizations/acme/projects"))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "id":"p1","organizationId":"o1","key":"WEB","name":"Website",
-            "description":null,"color":"#3b82f6",
+            "description":null,"color":"#3b82f6","revision":1,"archivedAt":null,
             "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"
         })))
         .mount(&server)
@@ -893,4 +895,517 @@ async fn me_exposes_public_id_and_memberships() {
         Some("usr_cPbfeqnghA-RLpDVOMQhHg")
     );
     assert_eq!(me.value.organizations[0].username.as_deref(), Some("n"));
+}
+
+// ---- Updated API surface: profiles, directories, lifecycle, links, bulk ---
+
+fn work_item_public_json(status: &str, revision: i64) -> serde_json::Value {
+    json!({
+        "id":"1","key":"HAM-1","projectId":"2","title":"T","description":null,
+        "type":"task","status":status,"priority":"low",
+        "assignee":{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"A"},"reporter":null,
+        "sprint":null,"parent":null,"labels":[],
+        "storyPoints":null,"dueDate":null,"archivedAt":null,
+        "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","revision":revision
+    })
+}
+
+#[tokio::test]
+async fn lists_organization_users_with_query() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items":[{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"Steven","username":"steven"}],
+            "page":{"limit":50,"hasMore":false,"nextCursor":null}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let resp = client
+        .list_organization_users(
+            "acme",
+            hamstik_api_client::ListOrganizationUsersOptions {
+                q: Some("ste".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.value.items[0].public_id, "usr_cPbfeqnghA-RLpDVOMQhHg");
+    let url = &server.received_requests().await.unwrap()[0].url;
+    assert!(url.query().unwrap_or_default().contains("q=ste"));
+}
+
+#[tokio::test]
+async fn lists_my_work_with_context() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/my/work"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items":[{
+                "id":"1","key":"HAM-1","revision":2,"title":"T","status":"todo",
+                "assignee":{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"A"},
+                "project":{"id":"p","key":"HAM","name":"Ham","color":"#000000"},
+                "organization":{"id":"o","slug":"acme","name":"Acme"}
+            }],
+            "page":{"limit":50,"hasMore":false,"nextCursor":null}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let resp = client
+        .list_my_work(hamstik_api_client::ListWorkItemsQuery {
+            scope: Some("open".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(resp.value.items[0].project.key, "HAM");
+    assert_eq!(resp.value.items[0].organization.slug, "acme");
+}
+
+#[tokio::test]
+async fn reads_user_profile() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users/usr_cPbfeqnghA-RLpDVOMQhHg"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"Steven",
+            "avatarUrl":null,"joinedAt":"2026-01-15T14:30:00.000Z",
+            "isCurrentUser":true,"sharedOrganizations":[],
+            "stats":{"projects":1,"workItemsAssigned":2,"workItemsCreated":3,"workItemsCompleted":4,"comments":5}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let profile = client
+        .get_user_profile("usr_cPbfeqnghA-RLpDVOMQhHg")
+        .await
+        .unwrap();
+    assert!(profile.value.is_current_user);
+    assert_eq!(profile.value.stats.work_items_assigned, 2);
+}
+
+#[tokio::test]
+async fn downloads_avatar_bytes() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users/usr_cPbfeqnghA-RLpDVOMQhHg/avatar"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Content-Type", "image/png")
+                .set_body_bytes(vec![9, 9, 9]),
+        )
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let avatar = client
+        .get_user_profile_avatar("usr_cPbfeqnghA-RLpDVOMQhHg")
+        .await
+        .unwrap();
+    assert_eq!(avatar.bytes, vec![9, 9, 9]);
+    assert_eq!(avatar.content_type.as_deref(), Some("image/png"));
+}
+
+#[tokio::test]
+async fn project_lifecycle_updates_and_archives() {
+    let server = MockServer::start().await;
+    let project_json = json!({
+        "id":"p1","organizationId":"o1","key":"WEB","name":"Website",
+        "description":null,"color":"#3b82f6","revision":2,"archivedAt":null,
+        "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"
+    });
+    Mock::given(method("PATCH"))
+        .and(path("/api/v1/organizations/acme/projects/WEB"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"project-2\"")
+                .set_body_json(project_json.clone()),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects/WEB/archive"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":"p1","organizationId":"o1","key":"WEB","name":"Website",
+            "description":null,"color":"#3b82f6","revision":3,
+            "archivedAt":"2026-04-01T00:00:00Z",
+            "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-04-01T00:00:00Z"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let updated = client
+        .update_project(
+            "acme",
+            "WEB",
+            &hamstik_api_client::UpdateProjectRequest {
+                name: Some("Website".into()),
+                ..Default::default()
+            },
+            "\"project-1\"",
+            "project-update-01",
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.etag.as_deref(), Some("\"project-2\""));
+
+    let archived = client
+        .archive_project("acme", "WEB", "*", "project-archive-01")
+        .await
+        .unwrap();
+    assert!(archived.value.archived_at.is_some());
+
+    let reqs = server.received_requests().await.unwrap();
+    let patch = reqs.iter().find(|r| r.method.as_str() == "PATCH").unwrap();
+    assert_eq!(
+        patch.headers.get("if-match").unwrap().to_str().unwrap(),
+        "\"project-1\""
+    );
+    let body: serde_json::Value = serde_json::from_slice(&patch.body).unwrap();
+    assert_eq!(body["name"], "Website");
+    let archive = reqs
+        .iter()
+        .find(|r| r.url.path().ends_with("/archive"))
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&archive.body).unwrap();
+    assert_eq!(body, json!({}));
+}
+
+#[tokio::test]
+async fn work_item_links_round_trip() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items":[{
+                "id":"l1","relation":"blocks",
+                "otherWorkItem":{"id":"2","key":"HAM-2","project":{"id":"p","key":"HAM","name":"Ham"},"title":"Other","type":"task","status":"todo"},
+                "createdBy":{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"A"},"createdAt":"2026-01-01T00:00:00Z"
+            }],
+            "page":{"limit":50,"hasMore":false,"nextCursor":null}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/links"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id":"l2","relation":"relates",
+            "otherWorkItem":{"id":"3","key":"HAM-3","project":{"id":"p","key":"HAM","name":"Ham"},"title":"Third","type":"bug","status":"todo"},
+            "createdBy":null,"createdAt":"2026-01-01T00:00:00Z"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/links/l2",
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let links = client
+        .list_work_item_links("acme", "HAM", "HAM-1", ListOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(links.value.items[0].other_work_item.key, "HAM-2");
+
+    let created = client
+        .create_work_item_link(
+            "acme",
+            "HAM",
+            "HAM-1",
+            &hamstik_api_client::CreateWorkItemLinkRequest {
+                target_key: Some("HAM-3".into()),
+                relation: "relates".into(),
+                ..Default::default()
+            },
+            "link-create-01",
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.value.relation, "relates");
+
+    client
+        .delete_work_item_link("acme", "HAM", "HAM-1", "l2", "link-delete-01")
+        .await
+        .unwrap();
+
+    let body: serde_json::Value = serde_json::from_slice(
+        &server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.method.as_str() == "POST")
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(body["targetKey"], "HAM-3");
+    assert_eq!(body["relation"], "relates");
+}
+
+#[tokio::test]
+async fn work_item_and_project_activity_parse() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/activity"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items":[{"id":"a1","action":"created","actor":null,"detail":null,"createdAt":"2026-01-01T00:00:00Z"}],
+            "page":{"limit":50,"hasMore":false,"nextCursor":null}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/activity"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items":[{"id":"a2","action":"status_changed","actor":{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"A"},"detail":{"from":"todo","to":"done"},"createdAt":"2026-01-02T00:00:00Z","workItem":{"id":"1","key":"HAM-1","title":"T"}}],
+            "page":{"limit":50,"hasMore":false,"nextCursor":null}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let wi_activity = client
+        .list_work_item_activity(
+            "acme",
+            "HAM",
+            "HAM-1",
+            hamstik_api_client::ActivityOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wi_activity.value.items[0].action, "created");
+
+    let project_activity = client
+        .list_project_activity(
+            "acme",
+            "HAM",
+            hamstik_api_client::ActivityOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(project_activity.value.items[0].work_item.key, "HAM-1");
+}
+
+#[tokio::test]
+async fn work_item_delete_sends_cascade_and_headers() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1",
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    client
+        .delete_work_item("acme", "HAM", "HAM-1", true, "\"wi-4\"", "delete-key-01")
+        .await
+        .unwrap();
+
+    let req = &server.received_requests().await.unwrap()[0];
+    assert_eq!(
+        req.headers.get("if-match").unwrap().to_str().unwrap(),
+        "\"wi-4\""
+    );
+    assert!(req.headers.contains_key("idempotency-key"));
+    let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body["cascade"], true);
+}
+
+#[tokio::test]
+async fn work_item_archive_unarchive_send_empty_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/archive",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-5\"")
+                .set_body_json(work_item_public_json("done", 5)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/unarchive",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(work_item_public_json("done", 6)))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let archived = client
+        .archive_work_item("acme", "HAM", "HAM-1", "\"wi-4\"", "archive-key-01")
+        .await
+        .unwrap();
+    assert_eq!(archived.etag.as_deref(), Some("\"wi-5\""));
+    // The public mutation projection carries publicId user summaries.
+    assert_eq!(
+        archived.value.assignee.as_ref().unwrap().public_id(),
+        Some("usr_cPbfeqnghA-RLpDVOMQhHg")
+    );
+    client
+        .unarchive_work_item("acme", "HAM", "HAM-1", "\"wi-5\"", "unarchive-key-01")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn comment_edit_sends_body_and_idempotency() {
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/comments/c1",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":"c1","workItemId":"w1","parentCommentId":null,
+            "author":{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"A"},
+            "body":"edited","deleted":false,
+            "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z",
+            "editedAt":"2026-01-02T00:00:00Z"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let resp = client
+        .update_comment(
+            "acme",
+            "HAM",
+            "HAM-1",
+            "c1",
+            &hamstik_api_client::UpdateCommentRequest {
+                body: "edited".into(),
+            },
+            "edit-key-01",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.value.edited_at.as_deref(),
+        Some("2026-01-02T00:00:00Z")
+    );
+}
+
+#[tokio::test]
+async fn bulk_routes_send_envelopes_and_parse_results() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/bulk-work-items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results":[{"index":0,"status":201,"workItem":{"id":"1","key":"HAM-1"}}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/api/v1/organizations/acme/bulk-work-items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results":[{"index":0,"status":200}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/bulk-work-item-transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results":[{"index":0,"status":409,"error":{"code":"INVALID_STATUS_TRANSITION","message":"no"}}]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let created = client
+        .bulk_create_work_items(
+            "acme",
+            &hamstik_api_client::BulkCreateEnvelope {
+                operations: vec![json!({"projectKey":"HAM","title":"First"})],
+            },
+            "bulk-create-01",
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.value.results[0].status, 201);
+
+    let updated = client
+        .bulk_update_work_items(
+            "acme",
+            &hamstik_api_client::BulkUpdateEnvelope {
+                concurrency: Some("last-write-wins".into()),
+                operations: vec![
+                    json!({"projectKey":"HAM","workItemKey":"HAM-1","changes":{"priority":"high"}}),
+                ],
+            },
+            "bulk-update-01",
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.value.results[0].status, 200);
+
+    let transitioned = client
+        .bulk_transition_work_items(
+            "acme",
+            &hamstik_api_client::BulkTransitionEnvelope {
+                concurrency: None,
+                operations: vec![
+                    json!({"projectKey":"HAM","workItemKey":"HAM-1","targetStatus":"done"}),
+                ],
+            },
+            "bulk-transition-01",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        transitioned.value.results[0].error.as_ref().unwrap()["code"],
+        "INVALID_STATUS_TRANSITION"
+    );
+
+    let reqs = server.received_requests().await.unwrap();
+    let create_body: serde_json::Value = serde_json::from_slice(&reqs[0].body).unwrap();
+    assert_eq!(create_body["operations"][0]["projectKey"], "HAM");
+    let update_body: serde_json::Value = serde_json::from_slice(&reqs[1].body).unwrap();
+    assert_eq!(update_body["concurrency"], "last-write-wins");
+}
+
+#[tokio::test]
+async fn org_and_project_work_collections_parse() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/work-items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items":[{"id":"1","key":"HAM-1","revision":1,
+                "project":{"id":"p","key":"HAM","name":"Ham","color":"#000000"},
+                "organization":{"id":"o","slug":"acme","name":"Acme"}}],
+            "page":{"limit":50,"hasMore":false,"nextCursor":null}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let resp = client
+        .list_organization_work_items(
+            "acme",
+            hamstik_api_client::ListWorkItemsQuery {
+                projects: vec!["HAM".into()],
+                sort: Some("dueDate".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.value.items[0].project.key, "HAM");
+    let url = &server.received_requests().await.unwrap()[0].url;
+    let query = url.query().unwrap_or_default();
+    assert!(query.contains("project=HAM"), "{query}");
+    assert!(query.contains("sort=dueDate"), "{query}");
 }

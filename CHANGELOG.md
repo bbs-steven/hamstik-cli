@@ -65,4 +65,63 @@ in-progress first release and will be dated and versioned when it ships.
 - Table rendering pads columns by visible width, so cells containing ANSI
   escape sequences (color swatches) no longer break column alignment.
 
+### Added (API sync)
+
+The frozen OpenAPI snapshot was refreshed against the updated Hamstik Public
+API v1 (29 → 51 operations; all changes additive):
+
+- Project lifecycle: `project edit`, `project archive`, `project unarchive`,
+  and `project list --archived`; Project projections now carry `revision` and
+  `archivedAt`, and edits use the `project-N` ETag (`project`).
+- Work Item lifecycle: `work archive`, `work unarchive`, and
+  `work delete [--cascade]` with Work Item ETag protection (`work`).
+- Work Item links: `work link list|add|delete` with the `blocks`,
+  `blocked_by`, and `relates` relations; new 409 codes `LINK_DUPLICATE` and
+  `LINK_CONTRADICTION` map to the conflict exit code (`work link`).
+- Activity feeds: `work activity`, `project activity`, and
+  `user activity`, all paginated (`--since` supported) (`work`, `project`,
+  `user`).
+- Comment editing: `work comment edit` (author-only; responses carry
+  `editedAt`) (`work comment`).
+- Bulk operations: `work bulk create|update|transition` accepting 1–50
+  operations per request from a JSON file or stdin, with per-item embedded
+  results and `require-revision` / `last-write-wins` concurrency modes
+  (`work bulk`).
+- Member directory: `org members` over `GET /organizations/{slug}/users`
+  (`org members`).
+- Organization Work and My Work collections: `org work` lists Work Items
+  across the organization with Project context; `--mine` sends
+  `assignee=me` (`org work`).
+- User profiles: `user view`, `user work`, `user activity`, and
+  `user avatar` over the `profile:read` endpoints; profiles expose only
+  public data (`publicId`, shared Organization usernames, visibility-scoped
+  stats) (`user`).
+- Work Item filters extended with `overdue`, `dueBefore`, `dueAfter`,
+  `sort` (`updated|dueDate|priority|rank`), `archived`, and sparse
+  `fields` fieldsets on `work list` and `org work`.
+- Assignees now accept immutable public IDs (`usr_...`) on create/edit,
+  mapped to `assigneePublicId`; legacy UUIDs keep using `assigneeId`.
+
+### Changed (API sync)
+
+- Work Item list summaries are sparse-tolerant: only `id`, `key`, and
+  `revision` are guaranteed when `fields=` is set; table rendering falls
+  back per column.
+- User summaries arrive in two shapes (`{id, name}` legacy and
+  `{publicId, name}` public); the client decodes both, so `work archive`,
+  `work unarchive`, label attach/detach, and comment edit responses render
+  correctly.
+- Work Item delete requests send an explicit `{"cascade": ...}` body and
+  require the `work-item:delete` scope (Organization owners only).
+- Error exit mapping: `LINK_DUPLICATE`, `LINK_CONTRADICTION`,
+  `WORK_ITEM_ARCHIVED`, `WORK_ITEM_HAS_CHILDREN`, and `PROJECT_ARCHIVED`
+  map to the conflict exit code (6).
+
+### Breaking (API sync)
+
+- `work list` gained shared filter flags via a flattened group; existing
+  flag names and semantics are unchanged.
+- `project list` output gained a `STATE` column; `project view` gained
+  `revision` and `archived` detail lines (`0.x`, pre-release).
+
 [Unreleased]: https://github.com/bbs-steven/hamstik-cli/commits/main
