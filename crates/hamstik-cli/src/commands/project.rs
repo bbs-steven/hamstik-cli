@@ -19,7 +19,7 @@ pub async fn run(session: &mut Session<'_>, args: &ProjectArgs) -> Result<(), Cl
     match &args.command {
         ProjectCommand::List(pagination) => list(session, pagination).await,
         ProjectCommand::View { key } => view(session, key).await,
-        ProjectCommand::Use { key } => use_project(session, key),
+        ProjectCommand::Use { key } => use_project(session, key).await,
     }
 }
 
@@ -75,8 +75,19 @@ async fn view(session: &mut Session<'_>, key: &str) -> Result<(), CliError> {
     })
 }
 
-fn use_project(session: &mut Session<'_>, key: &str) -> Result<(), CliError> {
+async fn use_project(session: &mut Session<'_>, key: &str) -> Result<(), CliError> {
     let selection = session.selection()?;
+    // SPEC §35: validate the project through the Public API — inside the
+    // resolved organization — before persisting it, so a typo never lands in
+    // the config and fails later with an opaque not-found.
+    let org = session.require_org(&selection)?;
+    let api = session.api(&selection)?;
+    let response = api
+        .get_project(&org, key)
+        .await
+        .map_err(CliError::from_client)?;
+    let project: Project = response.value;
+
     let profile_name = selection
         .profile
         .clone()
@@ -86,7 +97,7 @@ fn use_project(session: &mut Session<'_>, key: &str) -> Result<(), CliError> {
         .profiles
         .get_mut(&profile_name)
         .ok_or_else(|| CliError::config(format!("no such profile: {profile_name}")))?;
-    profile.default_project = Some(key.to_string());
+    profile.default_project = Some(project.key);
     session.config.save(&config)?;
 
     if session.json() {

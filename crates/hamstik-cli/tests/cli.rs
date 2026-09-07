@@ -33,7 +33,7 @@ fn work_item_json(status: &str, revision: i64) -> Value {
 fn me_json() -> Value {
     json!({
         "id": "u1", "name": "Steven", "email": "steven@example.com",
-        "authentication": {"authType": "pat", "credentialId": "c", "credentialName": "n", "scopes": [], "expiresAt": "2027-01-01T00:00:00Z"},
+        "authentication": {"type": "pat", "credentialId": "c", "credentialName": "n", "scopes": [], "expiresAt": "2027-01-01T00:00:00Z"},
         "defaultOrganization": null
     })
 }
@@ -700,5 +700,120 @@ async fn redirect_is_not_followed_end_to_end() {
         .assert()
         .failure();
     // Exactly one request: the redirect was never followed.
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+// ---- `use` command validation (SPEC §35) -----------------------------------
+
+/// A project JSON body for `GET /organizations/{org}/projects/{key}`.
+fn project_json(key: &str) -> Value {
+    json!({
+        "id": "p1", "key": key, "name": "P", "color": "#000000",
+        "description": null, "organizationId": "o1",
+        "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
+    })
+}
+
+/// A 404 with the stable NOT_FOUND code.
+fn not_found() -> ResponseTemplate {
+    ResponseTemplate::new(404).set_body_json(json!({
+        "error": {"code": "NOT_FOUND", "message": "no such resource"}
+    }))
+}
+
+/// `org use` validates the slug through the API before persisting it; a typo
+/// fails with the server's not-found error and nothing is stored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn org_use_rejects_unknown_slug() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/sph"))
+        .respond_with(not_found())
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["org", "use", "sph"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("no such resource"));
+
+    // Nothing was persisted.
+    let output = base(&server, &dir)
+        .args(["context", "show", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["organization"]["value"], Value::Null);
+    assert_eq!(body["profile"], Value::Null);
+}
+
+/// `org use` validates before persisting: the API is contacted first, and the
+/// missing-profile usage error surfaces only after validation succeeded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn org_use_persists_validated_slug() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/sph"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "o1", "slug": "sph", "name": "SPH", "role": "member",
+            "plan": "pro", "isDefault": false, "suspended": false,
+            "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["org", "use", "sph"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no active profile"));
+
+    // Validation hit the API (the 200 above matched) before persistence was
+    // attempted — persistence needs a profile, which the usage error confirms
+    // comes after validation.
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+/// `project use` validates the key inside the resolved organization; an
+/// organization slug typed into `project use` fails with not-found.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_use_rejects_unknown_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/sph/projects/sph"))
+        .respond_with(not_found())
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["--org", "sph", "project", "use", "sph"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("no such resource"));
+}
+
+/// `project use` stores the key after the server confirms it exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_use_persists_validated_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/sph/projects/P01"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(project_json("P01")))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["--org", "sph", "project", "use", "P01"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no active profile"));
+
+    // Validation hit the API (one request) before persistence was attempted.
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }

@@ -75,6 +75,7 @@ pub struct Me {
 #[serde(rename_all = "camelCase")]
 pub struct AuthenticationContext {
     /// Credential kind (e.g. `pat`).
+    #[serde(rename = "type")]
     pub auth_type: String,
     /// The server-side credential id.
     pub credential_id: String,
@@ -543,7 +544,7 @@ mod tests {
     fn me_parses_camel_case() {
         let raw = r##"{
             "id":"u1","name":"N","email":"n@x",
-            "authentication":{"authType":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
+            "authentication":{"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
             "defaultOrganization":null
         }"##;
         let me: Me = serde_json::from_str(raw).unwrap();

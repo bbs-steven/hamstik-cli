@@ -18,7 +18,9 @@ use super::{emit_json, emit_view};
 pub async fn run(session: &mut Session<'_>, args: &ContextArgs) -> Result<(), CliError> {
     match &args.command {
         ContextCommand::Show { explain } => show(session, *explain),
-        ContextCommand::Set { org, project } => set(session, org.as_deref(), project.as_deref()),
+        ContextCommand::Set { org, project } => {
+            set(session, org.as_deref(), project.as_deref()).await
+        }
         ContextCommand::Clear => clear(session),
         ContextCommand::Init => init(session),
     }
@@ -101,7 +103,7 @@ fn show(session: &mut Session<'_>, explain: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn set(
+async fn set(
     session: &mut Session<'_>,
     org: Option<&str>,
     project: Option<&str>,
@@ -112,6 +114,25 @@ fn set(
         ));
     }
     let selection = session.selection()?;
+    // SPEC §35: validate the selected resources through the Public API before
+    // persisting them. A project is validated inside the resolved
+    // organization, so a typo fails here instead of surfacing later as an
+    // opaque not-found.
+    let resolved_org = match org {
+        Some(org) => org.to_string(),
+        None => session.require_org(&selection)?,
+    };
+    let api = session.api(&selection)?;
+    if org.is_some() {
+        api.get_organization(&resolved_org)
+            .await
+            .map_err(CliError::from_client)?;
+    }
+    if let Some(project) = project {
+        api.get_project(&resolved_org, project)
+            .await
+            .map_err(CliError::from_client)?;
+    }
     let path = selection
         .context_path
         .clone()

@@ -52,7 +52,7 @@ async fn sends_auth_and_accept_and_captures_request_id() {
                     "id": "1",
                     "name": "Steven",
                     "email": "s@example.com",
-                    "authentication": {"authType":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
+                    "authentication": {"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
                     "defaultOrganization": null
                 })),
         )
@@ -107,7 +107,7 @@ async fn retries_transient_failure_then_succeeds() {
     let count = Arc::new(AtomicUsize::new(0));
     let body = json!({
         "id": "1", "name": "Steven", "email": "s@example.com",
-        "authentication": {"authType":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
+        "authentication": {"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
         "defaultOrganization": null
     });
     Mock::given(method("GET"))

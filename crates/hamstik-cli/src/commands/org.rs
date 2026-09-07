@@ -18,7 +18,7 @@ pub async fn run(session: &mut Session<'_>, args: &OrgArgs) -> Result<(), CliErr
     match &args.command {
         OrgCommand::List(pagination) => list(session, pagination).await,
         OrgCommand::View { slug } => view(session, slug).await,
-        OrgCommand::Use { slug } => use_org(session, slug),
+        OrgCommand::Use { slug } => use_org(session, slug).await,
     }
 }
 
@@ -102,8 +102,17 @@ async fn view(session: &mut Session<'_>, slug: &str) -> Result<(), CliError> {
     })
 }
 
-fn use_org(session: &mut Session<'_>, slug: &str) -> Result<(), CliError> {
+async fn use_org(session: &mut Session<'_>, slug: &str) -> Result<(), CliError> {
     let selection = session.selection()?;
+    // SPEC §35: validate the organization through the Public API before
+    // persisting it, so a typo never lands in the config.
+    let api = session.api(&selection)?;
+    let response = api
+        .get_organization(slug)
+        .await
+        .map_err(CliError::from_client)?;
+    let org = response.value;
+
     let profile_name = selection
         .profile
         .clone()
@@ -113,7 +122,7 @@ fn use_org(session: &mut Session<'_>, slug: &str) -> Result<(), CliError> {
         .profiles
         .get_mut(&profile_name)
         .ok_or_else(|| CliError::config(format!("no such profile: {profile_name}")))?;
-    profile.default_organization = Some(slug.to_string());
+    profile.default_organization = Some(org.slug);
     session.config.save(&config)?;
 
     if session.json() {
