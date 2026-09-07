@@ -826,11 +826,14 @@ fn doctor_reports_a_corrupt_context_file_with_its_path() {
     std::fs::write(&path, "version = 1\nhost = 42\n").unwrap();
 
     let expected_path = path.display().to_string();
+    // The path appears inside a longer JSON string, so no surrounding quotes:
+    // only the separators need JSON escaping (backslashes on Windows).
+    let expected_json = expected_path.replace('\\', "\\\\");
     config_command(&dir)
         .args(["doctor", "--json"])
         .assert()
         .code(10)
-        .stdout(predicate::str::contains(expected_path));
+        .stdout(predicate::str::contains(expected_json));
 }
 
 // ---- Hardening behaviors ---------------------------------------------------

@@ -123,18 +123,20 @@ fn emoji_probe_impl(env: &dyn Environment, stdout_terminal: bool, windows: bool)
     if env.var("TERM").as_deref() == Some("dumb") {
         return Probe::new(false, "emoji may not render (TERM=dumb)");
     }
+    if !stdout_terminal {
+        // Applies on every platform: without a terminal there is nothing to
+        // render into, so no verdict is meaningful.
+        return Probe::new(
+            false,
+            "emoji support not verifiable (stdout is not a terminal)",
+        );
+    }
     if windows {
         return if env.var("WT_SESSION").is_some() {
             Probe::new(true, "emoji supported (Windows Terminal)")
         } else {
             Probe::new(true, "emoji likely supported (Windows font fallback)")
         };
-    }
-    if !stdout_terminal {
-        return Probe::new(
-            false,
-            "emoji support not verifiable (stdout is not a terminal)",
-        );
     }
     if utf8_locale(env) {
         Probe::new(true, "emoji likely supported (UTF-8 locale)")
@@ -305,8 +307,14 @@ mod tests {
         assert!(probe.ok); // no WT_SESSION: font fallback still likely
         assert!(probe.detail.contains("Windows font fallback"));
 
+        // Windows Terminal detected: reported even without a tty env,
+        // but a piped stdout still short-circuits to "not verifiable".
         let env = tty_env().with_var("WT_SESSION", "some-session");
         let probe = emoji_probe_impl(&env, false, true);
+        assert!(!probe.ok);
+        assert!(probe.detail.contains("not verifiable"));
+
+        let probe = emoji_probe_impl(&env, true, true);
         assert!(probe.ok);
         assert!(probe.detail.contains("Windows Terminal"));
     }
