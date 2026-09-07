@@ -90,7 +90,27 @@ pub async fn run(session: &mut Session<'_>) -> Result<(), CliError> {
             .unwrap_or_else(|| "not set".to_string()),
     ));
 
+    // A keyring build without a persistent backend accepts writes that never
+    // survive the process, so report it before anything else can blame the
+    // token for it (SPEC §25, §26).
     let mut code = exit::SUCCESS;
+    if session.env.var("HAMSTIK_TOKEN").is_none() {
+        if credentials::store_is_persistent() {
+            checks.push(Check::info(
+                "credential store",
+                true,
+                "persistent store available".to_string(),
+            ));
+        } else {
+            code = exit::CONFIGURATION;
+            checks.push(Check::critical(
+                "credential store",
+                false,
+                credentials::NO_STORE_HINT.to_string(),
+            ));
+        }
+    }
+
     match resolve_token(session, &selection, &mut checks) {
         Some(secret) => match session.build_client(selection.host.clone(), secret) {
             Ok(api) => match api.whoami().await {
@@ -107,8 +127,9 @@ pub async fn run(session: &mut Session<'_>) -> Result<(), CliError> {
             }
         },
         None => {
-            // A failing credential store already pushed its own critical check.
-            if !checks.iter().any(|c| c.name == "credential store") {
+            // A failing credential store read already pushed its own critical
+            // check, so don't pile a second "no token" failure on top of it.
+            if !checks.iter().any(|c| c.name == "credential store access") {
                 code = exit::AUTHENTICATION;
                 checks.push(Check::critical(
                     "authentication",
@@ -170,7 +191,11 @@ fn resolve_token(
     match session.store.get(&account) {
         Ok(secret) => secret,
         Err(err) => {
-            checks.push(Check::critical("credential store", false, err.to_string()));
+            checks.push(Check::critical(
+                "credential store access",
+                false,
+                err.to_string(),
+            ));
             None
         }
     }

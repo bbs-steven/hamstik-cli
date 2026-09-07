@@ -32,6 +32,25 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 
+# Credential store backends. `keyring` ships NO default features: with no
+# backend feature enabled it silently resolves to its in-process mock store,
+# where writes "succeed" but vanish when the process exits. Each supported
+# platform MUST enable its native store (SPEC §25).
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
+
+# Linux/BSD: Secret Service over D-Bus. Pure Rust (zbus + rustls crypto) so the
+# CLI stays buildable without system D-Bus/OpenSSL headers.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+keyring = { workspace = true, features = [
+    "async-secret-service",
+    "crypto-rust",
+    "tokio",
+] }
+
 [dev-dependencies]
 assert_cmd = { workspace = true }
 predicates = { workspace = true }

@@ -246,20 +246,76 @@ fn logout(session: &mut Session<'_>) -> Result<(), CliError> {
         ));
     }
     let selection = session.selection()?;
+    let name = selection
+        .profile
+        .clone()
+        .ok_or_else(|| CliError::usage("no active profile to log out"))?;
     let profile = selection
         .profile_meta
         .as_ref()
-        .ok_or_else(|| CliError::usage("no active profile to log out"))?;
-    let account = credentials::account_key(&profile.host, &profile.user_id);
-    session
+        .ok_or_else(|| CliError::config(format!("profile {name:?} is not configured")))?;
+
+    // The credential is keyed by the resolved host (the key every command
+    // reads), so a host/profile mismatch means the selected profile owns no
+    // credential for this host and nothing must be deleted.
+    if profile.host != selection.host.as_str() {
+        return Err(CliError::usage(format!(
+            "profile {name:?} belongs to {}, not {}; choose a profile with --profile",
+            profile.host, selection.host
+        )));
+    }
+
+    let account = credentials::account_key(selection.host.as_str(), &profile.user_id);
+    // Read first so a second logout says "already logged out" instead of
+    // claiming a removal that never happened.
+    let had_credential = session
         .store
-        .delete(&account)
-        .map_err(|err| CliError::credential(format!("cannot delete credential: {err}")))?;
-    session
-        .out
-        .line(&format!(
-            "Removed stored credential for profile {:?}",
-            selection.profile.as_deref().unwrap_or_default()
-        ))
-        .map_err(CliError::general)
+        .get(&account)
+        .map_err(|err| CliError::credential(format!("credential store unavailable: {err}")))?
+        .is_some();
+    if had_credential {
+        session
+            .store
+            .delete(&account)
+            .map_err(|err| CliError::credential(format!("cannot delete credential: {err}")))?;
+    }
+
+    if session.json() {
+        return emit_json(
+            session,
+            &json!({
+                "logout": true,
+                "profile": name,
+                "host": selection.host.as_str(),
+                "credentialRemoved": had_credential,
+                // SPEC §29: local logout never revokes the PAT server-side.
+                "revoked": false,
+                "profileRetained": true,
+            }),
+        );
+    }
+
+    let summary = if had_credential {
+        format!(
+            "Removed stored credential for profile {name:?} ({})",
+            selection.host
+        )
+    } else {
+        format!("No stored credential for profile {name:?} (already logged out)")
+    };
+    session.out.line(&summary).map_err(CliError::general)?;
+    if !session.out.is_quiet() {
+        session
+            .out
+            .line("  local logout only; the PAT is not revoked server-side")
+            .map_err(CliError::general)?;
+        session
+            .out
+            .line(&format!(
+                "  profile metadata remains in {}; `auth list` still shows it",
+                session.config.path().display()
+            ))
+            .map_err(CliError::general)?;
+    }
+    Ok(())
 }

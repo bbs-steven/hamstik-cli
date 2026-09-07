@@ -121,6 +121,29 @@ The Dogfooding Alpha is implemented. Today the CLI provides:
 OAuth, the MCP server, and the Agent Skill remain future work. See the
 [design documents](#design-documents) for where the CLI is headed.
 
+## Credentials, profiles, and logout
+
+`hamstik auth login` validates the PAT against `GET /api/v1/me` before storing
+anything. Two things are then kept in two different places:
+
+| What | Where |
+| --- | --- |
+| The PAT itself | OS credential store — Windows Credential Manager, macOS Keychain, or the Linux Secret Service (GNOME Keyring / KWallet) |
+| Profile metadata (host, user id, email, defaults) | `config.toml` next to the other configuration (`hamstik auth list` reads this) |
+
+The CLI never falls back to plaintext storage. If no secure credential store is
+reachable — a headless Linux box with no Secret Service, for example — every
+login/logout fails with an explanation instead of writing the token to disk; use
+`HAMSTIK_TOKEN` for headless automation (see SPEC §26). `hamstik doctor` reports
+whether a persistent store was found under the `credential store` check.
+
+`hamstik auth logout` is a **local logout**: it removes the stored PAT for the
+selected profile and does not revoke the token server-side (the Public API has
+no PAT-revocation endpoint yet). Profile metadata is intentionally kept, so
+`hamstik auth list` still shows the profile after logout and `auth status`
+reports `no stored credential` until you log in again. Logging out twice is
+idempotent and reports `already logged out`.
+
 ## Build from source
 
 Prerequisites:
