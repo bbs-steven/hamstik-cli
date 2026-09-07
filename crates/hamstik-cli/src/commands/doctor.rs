@@ -296,16 +296,30 @@ fn resolve_token(
         };
     }
     let profile = selection.profile_meta.as_ref()?;
-    let account = credentials::account_key(selection.host.as_str(), &profile.user_id);
-    match session.store.get(&account) {
-        Ok(secret) => secret,
-        Err(err) => {
-            checks.push(Check::critical(
-                "credential store access",
-                false,
-                err.to_string(),
-            ));
-            None
+    // Try the selected host first, then the profile host (see `Session::token_for`).
+    let lookup_hosts = if selection.host.as_str() == profile.host.as_str() {
+        vec![selection.host.as_str()]
+    } else {
+        vec![selection.host.as_str(), profile.host.as_str()]
+    };
+    let mut found = None;
+    for host in &lookup_hosts {
+        let account = credentials::account_key(host, &profile.user_id);
+        match session.store.get(&account) {
+            Ok(Some(secret)) => {
+                found = Some(secret);
+                break;
+            }
+            Ok(None) => continue,
+            Err(err) => {
+                checks.push(Check::critical(
+                    "credential store access",
+                    false,
+                    err.to_string(),
+                ));
+                return None;
+            }
         }
     }
+    found
 }

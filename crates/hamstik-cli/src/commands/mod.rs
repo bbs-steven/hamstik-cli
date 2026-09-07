@@ -3,6 +3,12 @@
 
 //! Command dispatch and shared output helpers.
 
+use serde_json::Value;
+
+use crate::app::Session;
+use crate::args::Command;
+use crate::error::CliError;
+
 pub mod auth;
 pub mod completion;
 pub mod context_cmd;
@@ -13,12 +19,6 @@ pub mod project;
 pub mod sprint;
 pub mod user;
 pub mod work;
-
-use serde_json::Value;
-
-use crate::app::Session;
-use crate::args::Command;
-use crate::error::CliError;
 
 /// Runs the selected subcommand against the session.
 pub async fn dispatch(session: &mut Session<'_>, command: &Command) -> Result<(), CliError> {
@@ -95,4 +95,35 @@ where
         detail(session)?;
     }
     Ok(())
+}
+
+/// Resolves a user-facing user argument into a `usr_` public ID.
+///
+/// Accepts an existing public ID verbatim or `me`, which is resolved through
+/// `GET /me` (SPEC: writes accept only UUIDs or `usr_` public IDs; `me` is a
+/// CLI-side convenience). Returns `None` only for `none`, which callers use
+/// to clear assignment.
+pub(crate) async fn resolve_user_arg(
+    session: &Session<'_>,
+    value: &str,
+) -> Result<String, CliError> {
+    if value.eq_ignore_ascii_case("none") {
+        return Ok(value.to_string());
+    }
+    if value.starts_with("usr_") {
+        return Ok(value.to_string());
+    }
+    if !value.eq_ignore_ascii_case("me") {
+        return Err(CliError::usage(format!(
+            "invalid user argument {value:?}; expected `me`, `none`, or a `usr_` public ID"
+        )));
+    }
+    let selection = session.selection()?;
+    let api = session.api(&selection)?;
+    let response = api.whoami().await.map_err(CliError::from_client)?;
+    response
+        .value
+        .public_id
+        .clone()
+        .ok_or_else(|| CliError::protocol("server did not return a public ID for the current user"))
 }

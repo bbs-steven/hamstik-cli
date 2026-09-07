@@ -207,12 +207,25 @@ fn resolve_status_token(
         .profile_meta
         .as_ref()
         .ok_or_else(|| CliError::auth("not authenticated; run `hamstik auth login`"))?;
-    let account = credentials::account_key(selection.host.as_str(), &profile.user_id);
-    session
-        .store
-        .get(&account)
-        .map_err(|err| CliError::credential(format!("credential store unavailable: {err}")))?
-        .ok_or_else(|| CliError::auth("no stored credential; run `hamstik auth login`"))
+    // Try the selected host first, then the profile host (see `Session::token_for`).
+    let lookup_hosts = if selection.host.as_str() == profile.host.as_str() {
+        vec![selection.host.as_str()]
+    } else {
+        vec![selection.host.as_str(), profile.host.as_str()]
+    };
+    for host in &lookup_hosts {
+        let account = credentials::account_key(host, &profile.user_id);
+        if let Some(secret) = session
+            .store
+            .get(&account)
+            .map_err(|err| CliError::credential(format!("credential store unavailable: {err}")))?
+        {
+            return Ok(secret);
+        }
+    }
+    Err(CliError::auth(
+        "no stored credential; run `hamstik auth login`",
+    ))
 }
 
 fn list(session: &mut Session<'_>) -> Result<(), CliError> {

@@ -55,15 +55,29 @@ pub async fn run(session: &mut Session<'_>, args: &UserArgs) -> Result<(), CliEr
     }
 }
 
+/// Resolves a profile target: `me` becomes the caller's public ID via `GET /me`.
+async fn resolve_target(session: &Session<'_>, public_id: &str) -> Result<String, CliError> {
+    if public_id.starts_with("usr_") {
+        return Ok(public_id.to_string());
+    }
+    if public_id.eq_ignore_ascii_case("me") {
+        return super::resolve_user_arg(session, "me").await;
+    }
+    Err(CliError::usage(format!(
+        "invalid user argument {public_id:?}; expected `me` or a `usr_` public ID"
+    )))
+}
+
 async fn view(session: &mut Session<'_>, public_id: &str) -> Result<(), CliError> {
     let selection = session.selection()?;
     let api = session.api(&selection)?;
+    let target = resolve_target(session, public_id).await?;
     let response = api
-        .get_user_profile(public_id)
+        .get_user_profile(&target)
         .await
         .map_err(CliError::from_client)?;
     let profile = response.value.clone();
-    emit_view(session, &response.raw, public_id, |session| {
+    emit_view(session, &response.raw, &target, |session| {
         let mut lines = vec![
             ("public id", profile.public_id.clone()),
             ("name", profile.name.clone()),
@@ -108,6 +122,7 @@ async fn work(
 ) -> Result<(), CliError> {
     let selection = session.selection()?;
     let api = session.api(&selection)?;
+    let target = resolve_target(session, public_id).await?;
     let base = ListWorkItemsQuery {
         limit: pagination.limit,
         cursor: pagination.cursor.clone(),
@@ -124,7 +139,7 @@ async fn work(
     };
     let json_value: Value = if pagination.all {
         let fetch_api = api.clone();
-        let public_id = public_id.to_string();
+        let public_id = target.clone();
         let page = follow_all(move |cursor| {
             let fetch_api = fetch_api.clone();
             let public_id = public_id.clone();
@@ -144,7 +159,7 @@ async fn work(
         json!({ "items": page.raw_items, "page": page.page })
     } else {
         let response = api
-            .list_user_profile_work(public_id, base)
+            .list_user_profile_work(&target, base)
             .await
             .map_err(CliError::from_client)?;
         response.raw
@@ -202,6 +217,7 @@ async fn activity(
 ) -> Result<(), CliError> {
     let selection = session.selection()?;
     let api = session.api(&selection)?;
+    let target = resolve_target(session, public_id).await?;
     let base = ActivityOptions {
         limit: pagination.limit,
         cursor: pagination.cursor.clone(),
@@ -209,7 +225,7 @@ async fn activity(
     };
     let json_value: Value = if pagination.all {
         let fetch_api = api.clone();
-        let public_id = public_id.to_string();
+        let public_id = target.clone();
         let page = follow_all(move |cursor| {
             let fetch_api = fetch_api.clone();
             let public_id = public_id.clone();
@@ -231,7 +247,7 @@ async fn activity(
         json!({ "items": page.raw_items, "page": page.page })
     } else {
         let response = api
-            .list_user_profile_activity(public_id, base)
+            .list_user_profile_activity(&target, base)
             .await
             .map_err(CliError::from_client)?;
         response.raw
@@ -301,8 +317,9 @@ async fn avatar(
 ) -> Result<(), CliError> {
     let selection = session.selection()?;
     let api = session.api(&selection)?;
+    let target_user = resolve_target(session, public_id).await?;
     let download = api
-        .get_user_profile_avatar(public_id)
+        .get_user_profile_avatar(&target_user)
         .await
         .map_err(CliError::from_client)?;
     let target = match output {
@@ -316,7 +333,7 @@ async fn avatar(
             };
             // Refuse to write outside the current directory implicitly: use
             // only the final path component of the derived name.
-            let name = format!("{public_id}.{extension}");
+            let name = format!("{target_user}.{extension}");
             let safe = name.rsplit(['/', '\\']).next().unwrap_or(&name);
             std::path::PathBuf::from(safe)
         }
@@ -327,7 +344,7 @@ async fn avatar(
         emit_json(
             session,
             &json!({
-                "publicId": public_id,
+                "publicId": target_user,
                 "path": target.display().to_string(),
                 "size": download.bytes.len(),
             }),
@@ -336,7 +353,7 @@ async fn avatar(
         session
             .out
             .line(&format!(
-                "Downloaded avatar for {public_id} ({} bytes) to {}",
+                "Downloaded avatar for {target_user} ({} bytes) to {}",
                 download.bytes.len(),
                 target.display()
             ))

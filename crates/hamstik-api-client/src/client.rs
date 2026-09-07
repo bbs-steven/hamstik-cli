@@ -51,6 +51,15 @@ fn header_request_id() -> HeaderName {
 fn header_retry_after() -> HeaderName {
     HeaderName::from_static("retry-after")
 }
+fn header_rate_limit_limit() -> HeaderName {
+    HeaderName::from_static("ratelimit-limit")
+}
+fn header_rate_limit_remaining() -> HeaderName {
+    HeaderName::from_static("ratelimit-remaining")
+}
+fn header_rate_limit_reset() -> HeaderName {
+    HeaderName::from_static("ratelimit-reset")
+}
 fn header_content_disposition() -> HeaderName {
     HeaderName::from_static("content-disposition")
 }
@@ -135,6 +144,20 @@ pub struct ApiResponse<T> {
     pub etag: Option<String>,
     /// True when the server signaled this was an idempotent replay.
     pub idempotency_replayed: bool,
+    /// The server's rate-limit snapshot, when the response carried the
+    /// documented `RateLimit-*` headers.
+    pub rate_limit: Option<RateLimitSnapshot>,
+}
+
+/// The server's per-origin rate-limit state from `RateLimit-*` headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateLimitSnapshot {
+    /// The request budget per window (`RateLimit-Limit`).
+    pub limit: u64,
+    /// Requests remaining in the current window (`RateLimit-Remaining`).
+    pub remaining: u64,
+    /// Seconds until the window resets (`RateLimit-Reset`).
+    pub reset_in: u64,
 }
 
 /// A downloaded attachment's bytes plus the file name suggested by the server.
@@ -267,7 +290,9 @@ impl HamstikClient {
                 .retry_or_pass(response, spec.retryable, attempt)
                 .await?
             {
-                return self.finalize(response).await;
+                let finalized = self.finalize(response).await?;
+                self.absorb_depleted_window(finalized.rate_limit).await;
+                return Ok(finalized);
             }
             // A retry was scheduled; rebuild the request for the next attempt.
             attempt += 1;
@@ -280,6 +305,11 @@ impl HamstikClient {
     /// `None`, consuming the response. Otherwise returns the response for
     /// finalization. A `429` whose `Retry-After` exceeds [`MAX_RETRY_AFTER`]
     /// surfaces the rate-limit error immediately instead of blocking.
+    ///
+    /// When the server reports a zero `RateLimit-Remaining` on a successful
+    /// response, a bounded proactive wait (capped at [`MAX_RETRY_AFTER`])
+    /// absorbs the window reset instead of sending the next request straight
+    /// into a guaranteed `429`.
     async fn retry_or_pass(
         &self,
         response: Response,
@@ -305,6 +335,23 @@ impl HamstikClient {
         };
         self.sleeper.sleep(wait).await;
         Ok(None)
+    }
+
+    /// Waits out a depleted rate-limit window when the server reports one
+    /// proactively on a success response.
+    ///
+    /// Only fires when `RateLimit-Remaining` is present and zero; the wait is
+    /// the window reset capped at [`MAX_RETRY_AFTER`] so a pathological
+    /// `RateLimit-Reset` never stalls the CLI.
+    async fn absorb_depleted_window(&self, rate_limit: Option<RateLimitSnapshot>) {
+        let Some(snapshot) = rate_limit else {
+            return;
+        };
+        if snapshot.remaining > 0 || snapshot.reset_in == 0 {
+            return;
+        }
+        let wait = Duration::from_secs(snapshot.reset_in).min(MAX_RETRY_AFTER);
+        self.sleeper.sleep(wait).await;
     }
 
     fn build(&self, spec: &RequestSpec<'_>) -> Result<reqwest::RequestBuilder, ClientError> {
@@ -516,6 +563,7 @@ impl HamstikClient {
                 request_id,
                 etag,
                 idempotency_replayed,
+                rate_limit: rate_limit_snapshot(&headers),
             })
         } else {
             Err(self.api_error_from(status, &raw, &headers))
@@ -556,6 +604,7 @@ impl HamstikClient {
             request_id: extract_request_id(raw, headers),
             field_errors: parse_field_errors(error.and_then(|e| e.get("fieldErrors"))),
             retry_after,
+            rate_limit: rate_limit_snapshot(headers),
         })
     }
 }
@@ -563,6 +612,30 @@ impl HamstikClient {
 fn retry_after_from(response: &Response) -> Option<Duration> {
     header_str(response.headers(), &header_retry_after())
         .and_then(|v| parse_retry_after(v, SystemTime::now()))
+}
+
+/// Reads the documented `RateLimit-*` headers into a snapshot.
+///
+/// Returns `None` unless all three headers are present and parseable, so a
+/// missing or partial set never misleads callers.
+fn rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
+    let limit = header_str(headers, &header_rate_limit_limit())?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    let remaining = header_str(headers, &header_rate_limit_remaining())?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    let reset_in = header_str(headers, &header_rate_limit_reset())?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    Some(RateLimitSnapshot {
+        limit,
+        remaining,
+        reset_in,
+    })
 }
 
 /// Reads a response body, enforcing [`MAX_BODY_BYTES`].
@@ -2483,6 +2556,91 @@ mod tests {
         assert!(client.whoami().await.is_err());
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests.len(), 1, "redirect must not be followed");
+    }
+
+    #[tokio::test]
+    async fn rate_limit_headers_are_captured_on_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/me"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("RateLimit-Limit", "100")
+                    .insert_header("RateLimit-Remaining", "37")
+                    .insert_header("RateLimit-Reset", "12")
+                    .set_body_json(serde_json::json!({
+                        "id": "u1", "publicId": "usr_cPbfeqnghA-RLpDVOMQhHg",
+                        "name": "N", "email": "n@x",
+                        "authentication": {"type": "pat", "credentialId": "c",
+                            "credentialName": "n", "scopes": [],
+                            "expiresAt": "2027-01-01T00:00:00Z"},
+                        "defaultOrganization": null,
+                        "organizations": []
+                    })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server.uri());
+        let response = client.whoami().await.unwrap();
+        let snapshot = response.rate_limit.expect("snapshot present");
+        assert_eq!(snapshot.limit, 100);
+        assert_eq!(snapshot.remaining, 37);
+        assert_eq!(snapshot.reset_in, 12);
+    }
+
+    #[tokio::test]
+    async fn partial_rate_limit_headers_yield_no_snapshot() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/me"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("RateLimit-Remaining", "37")
+                    .set_body_json(serde_json::json!({
+                        "id": "u1", "publicId": "usr_cPbfeqnghA-RLpDVOMQhHg",
+                        "name": "N", "email": "n@x",
+                        "authentication": {"type": "pat", "credentialId": "c",
+                            "credentialName": "n", "scopes": [],
+                            "expiresAt": "2027-01-01T00:00:00Z"},
+                        "defaultOrganization": null,
+                        "organizations": []
+                    })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server.uri());
+        let response = client.whoami().await.unwrap();
+        assert!(response.rate_limit.is_none());
+    }
+
+    #[tokio::test]
+    async fn rate_limit_headers_are_captured_on_429() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/me"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "2")
+                    .insert_header("RateLimit-Limit", "100")
+                    .insert_header("RateLimit-Remaining", "0")
+                    .insert_header("RateLimit-Reset", "30")
+                    .set_body_json(serde_json::json!({
+                        "error": {"code": "RATE_LIMITED", "message": "slow down"}
+                    })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server.uri());
+        let err = client.whoami().await.unwrap_err();
+        let api = err.as_api().unwrap();
+        assert_eq!(api.code, "RATE_LIMITED");
+        assert_eq!(api.retry_after, Some(Duration::from_secs(2)));
+        let snapshot = api.rate_limit.expect("snapshot on 429");
+        assert_eq!(snapshot.remaining, 0);
+        assert_eq!(snapshot.reset_in, 30);
     }
 
     #[tokio::test]

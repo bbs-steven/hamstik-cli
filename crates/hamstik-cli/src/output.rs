@@ -116,7 +116,19 @@ impl Output {
                 serde_json::to_string_pretty(&error.to_json()).map_err(io::Error::other)?;
             writeln!(self.err, "{rendered}")
         } else {
-            writeln!(self.err, "error: {}", error.message)
+            writeln!(self.err, "error: {}", error.message)?;
+            // Verbose human output surfaces the correlation id that JSON mode
+            // always includes, so `--verbose` requests can be matched against
+            // server logs without rerunning with `--json`.
+            if self.verbose {
+                if let Some(request_id) = &error.request_id {
+                    writeln!(self.err, "request id: {request_id}")?;
+                }
+                if let Some(status) = error.status {
+                    writeln!(self.err, "http status: {status}")?;
+                }
+            }
+            Ok(())
         }
     }
 }
@@ -285,6 +297,7 @@ mod tests {
             request_id: Some("r1".into()),
             field_errors: Default::default(),
             retry_after: None,
+            rate_limit: None,
         });
         out.error(&err).unwrap();
         let rendered: Value = serde_json::from_str(&text(&err_sink)).unwrap();

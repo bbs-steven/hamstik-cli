@@ -1283,6 +1283,7 @@ async fn label_list_and_create_flow() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn work_label_add_sends_if_match_and_label_id() {
+    const LABEL_ID: &str = "11111111-2222-4333-8444-555555555555";
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(
@@ -1319,7 +1320,7 @@ async fn work_label_add_sends_if_match_and_label_id() {
             "add",
             "HAM-1",
             "--label",
-            "l1",
+            LABEL_ID,
             "--json",
         ])
         .assert()
@@ -1337,7 +1338,78 @@ async fn work_label_add_sends_if_match_and_label_id() {
         "\"wi-4\""
     );
     let body: Value = serde_json::from_slice(&req.body).unwrap();
-    assert_eq!(body["labelId"], "l1");
+    assert_eq!(body["labelId"], LABEL_ID);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_label_add_resolves_label_name_to_id() {
+    const LABEL_ID: &str = "11111111-2222-4333-8444-555555555555";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-4\"")
+                .set_body_json(work_item_json("todo", 4)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [
+                {
+                    "id": LABEL_ID,
+                    "name": "frontend",
+                    "color": "#6366f1",
+                    "createdAt": "2026-01-01T00:00:00.000Z",
+                }
+            ],
+            "page": {"limit": 200, "hasMore": false, "nextCursor": null},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/labels",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-5\"")
+                .set_body_json(work_item_json("todo", 5)),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "label",
+            "add",
+            "HAM-1",
+            "--label",
+            "Frontend",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let req = &server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.method.as_str() == "POST")
+        .unwrap();
+    let body: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body["labelId"], LABEL_ID);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1828,6 +1900,166 @@ async fn work_create_sends_assignee_public_id() {
         serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
     assert_eq!(body["assigneePublicId"], "usr_cPbfeqnghA-RLpDVOMQhHg");
     assert!(body.get("assigneeId").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_create_resolves_assignee_me_via_whoami() {
+    const PUBLIC_ID: &str = "usr_cPbfeqnghA-RLpDVOMQhHg";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(me_public_json()))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(work_item_json("todo", 1)))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "create",
+            "--title",
+            "T",
+            "--assignee",
+            "me",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let body: Value =
+        serde_json::from_slice(&server.received_requests().await.unwrap()[1].body).unwrap();
+    assert_eq!(body["assigneePublicId"], PUBLIC_ID);
+    assert!(body.get("assigneeId").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_edit_resolves_parent_key_to_uuid() {
+    const PARENT_ID: &str = "22222222-3333-4444-8555-666666666666";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-42",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-9\"")
+                .set_body_json(work_item_json("todo", 9)),
+        )
+        .mount(&server)
+        .await;
+    // The parent read: detail endpoint with key -> carries the id.
+    Mock::given(method("GET"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": PARENT_ID, "key": "HAM-1", "title": "parent",
+            "type": "task", "status": "todo", "priority": "low",
+            "assignee": null, "reporter": null, "sprint": null,
+            "parent": null, "labels": [], "storyPoints": null, "dueDate": null,
+            "description": null,
+            "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z",
+            "revision": 1, "projectId": "p1"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-42",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-10\"")
+                .set_body_json(work_item_json("todo", 10)),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "edit",
+            "HAM-42",
+            "--parent",
+            "HAM-1",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let body: Value = serde_json::from_slice(
+        &server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.method.as_str() == "PATCH")
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(body["parentId"], PARENT_ID);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_comment_list_excludes_deleted() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/comments",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [
+                {"id": "c1", "workItemId": "w1", "parentCommentId": null,
+                 "author": {"id": "u1", "name": "Steven"}, "body": "alive",
+                 "deleted": false, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"},
+                {"id": "c2", "workItemId": "w1", "parentCommentId": "c1",
+                 "author": {"id": "u1", "name": "Steven"}, "body": null,
+                 "deleted": true, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"},
+                {"id": "c3", "workItemId": "w1", "parentCommentId": null,
+                 "author": {"id": "u1", "name": "Steven"}, "body": "also alive",
+                 "deleted": false, "createdAt": "2026-01-02T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z"}
+            ],
+            "page": {"limit": 50, "hasMore": false, "nextCursor": null}
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "comment",
+            "list",
+            "HAM-1",
+            "--exclude-deleted",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("alive"));
+    assert!(!stdout.contains("(deleted)"));
+    assert!(!stdout.is_empty());
+    assert_eq!(stdout.matches("Steven").count(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -129,6 +129,7 @@ pub enum AuthCommand {
     /// Select the active profile.
     Switch {
         /// Profile name to activate.
+        #[arg(value_name = "PROFILE")]
         profile: String,
     },
     /// Remove the local credential (does not revoke the server-side PAT).
@@ -136,11 +137,13 @@ pub enum AuthCommand {
     /// Log out and forget a profile: remove its stored credential and its
     /// config entry (does not revoke the server-side PAT).
     ///
-    /// Unlike `logout`, this runs even while HAMSTIK_TOKEN is set: forget is
-    /// explicit about the profile being removed, not about the credential
-    /// currently in use.
+    /// The profile is named positionally: `hamstik auth forget NAME`, or run
+    /// with no argument to forget the selected profile. Unlike `logout`, this
+    /// runs even while HAMSTIK_TOKEN is set: forget is explicit about the
+    /// profile being removed, not about the credential currently in use.
     Forget {
         /// Profile to forget (defaults to the selected profile).
+        #[arg(value_name = "PROFILE")]
         profile: Option<String>,
     },
 }
@@ -793,12 +796,12 @@ pub struct WorkCreateArgs {
     #[arg(long, value_enum)]
     pub priority: Option<PriorityArg>,
     /// Assignee user id (or `me`).
-    #[arg(long, value_name = "USER|me")]
+    #[arg(long, value_name = "PUBLIC_ID|me")]
     pub assignee: Option<String>,
     /// Sprint id.
     #[arg(long, value_name = "SPRINT")]
     pub sprint: Option<String>,
-    /// Parent work item key.
+    /// Parent work item key (or parent UUID).
     #[arg(long, value_name = "KEY")]
     pub parent: Option<String>,
     /// Story point estimate.
@@ -837,12 +840,12 @@ pub struct WorkEditArgs {
     #[arg(long, value_enum)]
     pub priority: Option<PriorityArg>,
     /// New assignee (or `me`).
-    #[arg(long, value_name = "USER|me", conflicts_with = "clear_assignee")]
+    #[arg(long, value_name = "PUBLIC_ID|me", conflicts_with = "clear_assignee")]
     pub assignee: Option<String>,
-    /// New sprint id.
+    /// Sprint id.
     #[arg(long, value_name = "SPRINT", conflicts_with = "clear_sprint")]
     pub sprint: Option<String>,
-    /// New parent key.
+    /// New parent key (or parent UUID).
     #[arg(long, value_name = "KEY", conflicts_with = "clear_parent")]
     pub parent: Option<String>,
     #[arg(
@@ -897,6 +900,10 @@ pub enum CommentCommand {
     List {
         /// Work item key.
         key: String,
+        /// Hide soft-deleted comments instead of rendering `(deleted)`
+        /// placeholders.
+        #[arg(long = "exclude-deleted")]
+        exclude_deleted: bool,
         /// Pagination options.
         #[command(flatten)]
         pagination: PaginationArgs,
@@ -958,7 +965,7 @@ pub enum WorkLabelCommand {
     Add {
         /// Work item key.
         key: String,
-        /// Label id (UUID).
+        /// Label id (UUID) or label name.
         #[arg(long)]
         label: String,
         /// Bypass revision conflict protection (If-Match: *).
@@ -972,7 +979,7 @@ pub enum WorkLabelCommand {
     Remove {
         /// Work item key.
         key: String,
-        /// Label id (UUID).
+        /// Label id (UUID) or label name.
         #[arg(long)]
         label: String,
         /// Bypass revision conflict protection (If-Match: *).

@@ -38,3 +38,7 @@ missing_docs = "warn"
 [lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"
+# ClientError is this crate's pervasive return type (111 Result signatures);
+# boxing it would buy a few bytes at the cost of an allocation on every call.
+# `ApiError` stays a plain value: field_errors is rare and small in practice.
+result_large_err = "allow"

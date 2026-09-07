@@ -199,6 +199,34 @@ fn assignee_fields(value: &Option<String>) -> (Option<String>, Option<String>) {
     }
 }
 
+/// True when `value` parses as a UUID (the wire form for parent/label ids).
+fn is_uuid(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok()
+}
+
+/// Resolves a `--parent` argument into the parent's wire form.
+///
+/// The server accepts only a parent UUID on the wire; a Work Item key
+/// (e.g. `HAM-42`) is resolved client-side via the detail read. `none` clears
+/// the parent.
+async fn resolve_parent_arg(
+    session: &Session<'_>,
+    org: &str,
+    project: &str,
+    value: &str,
+) -> Result<String, CliError> {
+    if value.eq_ignore_ascii_case("none") || is_uuid(value) {
+        return Ok(value.to_string());
+    }
+    let selection = session.selection()?;
+    let api = session.api(&selection)?;
+    let response = api
+        .get_work_item(org, project, value)
+        .await
+        .map_err(CliError::from_client)?;
+    Ok(response.value.id)
+}
+
 fn summary_row(item: &WorkItemSummary) -> Vec<String> {
     vec![
         item.key.clone(),
@@ -294,7 +322,15 @@ async fn create(session: &mut Session<'_>, args: &WorkCreateArgs) -> Result<(), 
     }
 
     let description = read_text(args.description.clone(), args.description_file.as_deref())?;
-    let (assignee_id, assignee_public_id) = assignee_fields(&args.assignee);
+    let assignee = match &args.assignee {
+        Some(value) => Some(super::resolve_user_arg(session, value).await?),
+        None => None,
+    };
+    let (assignee_id, assignee_public_id) = assignee_fields(&assignee);
+    let parent_id = match &args.parent {
+        Some(value) => Some(resolve_parent_arg(session, &org, &project, value).await?),
+        None => None,
+    };
     let body = CreateWorkItemRequest {
         title,
         description,
@@ -304,7 +340,7 @@ async fn create(session: &mut Session<'_>, args: &WorkCreateArgs) -> Result<(), 
         assignee_id,
         assignee_public_id,
         sprint_id: args.sprint.clone(),
-        parent_id: args.parent.clone(),
+        parent_id,
         story_points: args.story_points,
         due_date: args.due_date.clone(),
     };
@@ -339,15 +375,23 @@ async fn edit(session: &mut Session<'_>, args: &WorkEditArgs) -> Result<(), CliE
     };
     // A public ID (`usr_...`) must go to `assigneePublicId`; everything else
     // (legacy UUID) goes to `assigneeId`. Clearing targets whichever field the
-    // caller named.
+    // caller named. `me` is resolved to the caller's public ID first.
+    let resolved_assignee = match &args.assignee {
+        Some(value) if !value.eq_ignore_ascii_case("none") => {
+            Some(super::resolve_user_arg(session, value).await?)
+        }
+        other => other.clone(),
+    };
     let (assignee_id, assignee_public_id) = if args.clear_assignee {
-        match &args.assignee {
+        match &resolved_assignee {
             Some(id) if id.starts_with("usr_") => (None, Some(None)),
-            _ => (Some(None), None),
+            Some(id) => (Some(Some(id.clone())), None),
+            None => (Some(None), None),
         }
     } else {
-        match &args.assignee {
+        match &resolved_assignee {
             Some(id) if id.starts_with("usr_") => (None, Some(Some(id.clone()))),
+            Some(id) if id.eq_ignore_ascii_case("none") => (Some(None), None),
             Some(id) => (Some(Some(id.clone())), None),
             None => (None, None),
         }
@@ -361,7 +405,14 @@ async fn edit(session: &mut Session<'_>, args: &WorkEditArgs) -> Result<(), CliE
         assignee_id,
         assignee_public_id,
         sprint_id: tri(args.clear_sprint, args.sprint.clone()),
-        parent_id: tri(args.clear_parent, args.parent.clone()),
+        parent_id: match tri(args.clear_parent, args.parent.clone()) {
+            Some(None) => Some(None),
+            Some(Some(value)) => {
+                let resolved = resolve_parent_arg(session, &org, &project, &value).await?;
+                Some(Some(resolved))
+            }
+            None => None,
+        },
         story_points: tri(args.clear_story_points, args.story_points),
         due_date: tri(args.clear_due_date, args.due_date.clone()),
     };
@@ -526,6 +577,48 @@ async fn label(session: &mut Session<'_>, args: &WorkLabelArgs) -> Result<(), Cl
     let project = session.require_project(&selection)?;
     let api = session.api(&selection)?;
 
+    // The wire form is a label UUID. A name (case-insensitive; labels are
+    // stored lowercase) is resolved client-side through the Project label
+    // list so the CLI accepts either form.
+    let label_id = if is_uuid(label) {
+        label.clone()
+    } else {
+        let name = label.trim().to_lowercase();
+        let mut cursor: Option<String> = None;
+        let mut resolved: Option<String> = None;
+        loop {
+            let response = api
+                .list_labels(
+                    &org,
+                    &project,
+                    ListOptions {
+                        // The label collection caps `limit` at 100.
+                        limit: Some(100),
+                        cursor: cursor.clone(),
+                    },
+                )
+                .await
+                .map_err(CliError::from_client)?;
+            if let Some(matched) = response
+                .value
+                .items
+                .iter()
+                .find(|label| label.name == name)
+                .map(|l| l.id.clone())
+            {
+                resolved = Some(matched);
+                break;
+            }
+            if !response.value.page.has_more {
+                break;
+            }
+            cursor = response.value.page.next_cursor;
+        }
+        resolved.ok_or_else(|| {
+            CliError::not_found(format!("no label named {label:?} in project {project}"))
+        })?
+    };
+
     let if_match = if force {
         "*".to_string()
     } else {
@@ -548,11 +641,11 @@ async fn label(session: &mut Session<'_>, args: &WorkLabelArgs) -> Result<(), Cl
 
     let response = match command {
         "add" => api
-            .attach_label(&org, &project, key, label, &if_match, &idempotency)
+            .attach_label(&org, &project, key, &label_id, &if_match, &idempotency)
             .await
             .map_err(CliError::from_client)?,
         _ => api
-            .detach_label(&org, &project, key, label, &if_match, &idempotency)
+            .detach_label(&org, &project, key, &label_id, &if_match, &idempotency)
             .await
             .map_err(CliError::from_client)?,
     };
@@ -773,7 +866,11 @@ fn read_upload(file: &str, explicit_name: Option<&str>) -> Result<(Vec<u8>, Stri
 
 async fn comment(session: &mut Session<'_>, args: &CommentArgs) -> Result<(), CliError> {
     match &args.command {
-        CommentCommand::List { key, pagination } => {
+        CommentCommand::List {
+            key,
+            exclude_deleted,
+            pagination,
+        } => {
             let selection = session.selection()?;
             let org = session.require_org(&selection)?;
             let project = session.require_project(&selection)?;
@@ -790,9 +887,19 @@ async fn comment(session: &mut Session<'_>, args: &CommentArgs) -> Result<(), Cl
                 )
                 .await
                 .map_err(CliError::from_client)?;
-            let rows: Vec<Vec<String>> = response
-                .value
-                .items
+            // Soft-deleted comments stay in the thread to preserve reply
+            // structure; `--exclude-deleted` filters them from the rendering.
+            let items: Vec<_> = if *exclude_deleted {
+                response
+                    .value
+                    .items
+                    .iter()
+                    .filter(|comment| !comment.deleted)
+                    .collect()
+            } else {
+                response.value.items.iter().collect()
+            };
+            let rows: Vec<Vec<String>> = items
                 .iter()
                 .map(|c| {
                     let body = c.body.clone().unwrap_or_else(|| "(deleted)".to_string());
@@ -1053,6 +1160,7 @@ async fn list_links(
             request_id: None,
             etag: None,
             idempotency_replayed: false,
+            rate_limit: None,
         })
     } else {
         api.list_work_item_links(org, project, key, opts)

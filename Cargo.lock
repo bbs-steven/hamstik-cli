@@ -897,6 +897,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
+ "uuid",
  "wiremock",
 ]
 

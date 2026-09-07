@@ -56,6 +56,9 @@ pub struct ApiError {
     pub field_errors: BTreeMap<String, Vec<String>>,
     /// The parsed `Retry-After` header, when the server sent one.
     pub retry_after: Option<Duration>,
+    /// The server's rate-limit snapshot from `RateLimit-*` headers, when the
+    /// rejection carried them.
+    pub rate_limit: Option<crate::client::RateLimitSnapshot>,
 }
 
 impl ApiError {

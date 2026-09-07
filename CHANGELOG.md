@@ -65,7 +65,37 @@ in-progress first release and will be dated and versioned when it ships.
 - Table rendering pads columns by visible width, so cells containing ANSI
   escape sequences (color swatches) no longer break column alignment.
 
-### Added (API sync)
+### Fixed
+
+- `work edit --parent` and `work create --parent` now accept a Work Item key
+  (e.g. `HAM-42`) as documented, resolving it to the parent UUID client-side
+  before sending; the help text states the accepted forms (`work`).
+- `work label add|remove --label` accepts a label name (case-insensitive;
+  labels are stored lowercase) in addition to a UUID, resolving it through the
+  Project label list. An unknown name is a clear `NOT_FOUND` (exit 5) instead
+  of an opaque server validation error (`work label`).
+- `--assignee me` on `work create|edit` resolves to the caller's `usr_` public
+  ID via `GET /me` before sending; the server only accepts ids on writes
+  (`work`).
+- `user view|work|activity|avatar` accept `me` as the target, resolving it the
+  same way (`user`).
+- `--host` no longer hides a profile's stored credential: the lookup tries the
+  selected host first, then the profile host recorded at login, and the
+  failure message names both hosts when both were tried (`auth`, `doctor`).
+- `--verbose` human error output now includes the `requestId` and HTTP status
+  of API failures, matching what `--json` always showed (`output`).
+
+### Added
+
+- `work comment list --exclude-deleted` hides soft-deleted comments instead of
+  rendering `(deleted)` placeholders (`work comment`).
+- The API client captures the documented `RateLimit-Limit` /
+  `RateLimit-Remaining` / `RateLimit-Reset` headers on responses and errors.
+  A successful request that leaves the window depleted waits out the reset
+  (capped at the same 30 s bound as `Retry-After`) instead of sending the
+  next request straight into a guaranteed `429`.
+
+### Changed (API sync)
 
 The frozen OpenAPI snapshot was refreshed against the updated Hamstik Public
 API v1 (29 → 51 operations; all changes additive):

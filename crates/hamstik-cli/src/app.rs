@@ -222,16 +222,36 @@ impl Session<'_> {
         let profile = selection.profile_meta.as_ref().ok_or_else(|| {
             CliError::usage("not authenticated; run `hamstik auth login` or set HAMSTIK_TOKEN")
         })?;
-        let account = credentials::account_key(selection.host.as_str(), &profile.user_id);
-        self.store
-            .get(&account)
-            .map_err(map_credential_error)?
-            .ok_or_else(|| {
-                CliError::usage(format!(
-                    "no stored credential for profile {:?}; run `hamstik auth login`",
-                    selection.profile.as_deref().unwrap_or_default()
-                ))
-            })
+        // The profile's credential was stored under the host recorded at login
+        // time. A `--host` override re-addresses requests but must not hide the
+        // profile's stored credential, so try the overridden host first and
+        // fall back to the profile host. Credentials for the same user on a
+        // genuinely different host stay isolated (SPEC §24).
+        let lookup_hosts = if selection.host.as_str() == profile.host.as_str() {
+            vec![selection.host.as_str()]
+        } else {
+            vec![selection.host.as_str(), profile.host.as_str()]
+        };
+        for host in &lookup_hosts {
+            let account = credentials::account_key(host, &profile.user_id);
+            if let Some(secret) = self.store.get(&account).map_err(map_credential_error)? {
+                return Ok(secret);
+            }
+        }
+        let host_note = if lookup_hosts.len() > 1 {
+            format!(
+                " (credential lookup tried both --host {} and profile host {})",
+                selection.host.as_str(),
+                profile.host.as_str()
+            )
+        } else {
+            String::new()
+        };
+        Err(CliError::usage(format!(
+            "no stored credential for profile {:?}{}; run `hamstik auth login`",
+            selection.profile.as_deref().unwrap_or_default(),
+            host_note
+        )))
     }
 
     /// Builds an API client for the resolved selection.
@@ -370,5 +390,168 @@ pub async fn run(cli: Cli, services: Services<'_>) -> i32 {
             let _ = session.out.error(&err);
             err.exit_code()
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::context::{ResolvedField, Source};
+    use crate::credentials::MemoryCredentialStore;
+    use hamstik_api_client::Host;
+    use std::collections::BTreeMap;
+
+    struct NullPrompt;
+
+    impl crate::input::Prompt for NullPrompt {
+        fn read_line(&mut self, _prompt: &str) -> std::io::Result<String> {
+            Err(std::io::Error::other("no interactive input in tests"))
+        }
+        fn read_secret(&mut self, _prompt: &str) -> std::io::Result<String> {
+            Err(std::io::Error::other("no interactive input in tests"))
+        }
+    }
+
+    struct StaticEnvironment {
+        vars: BTreeMap<String, String>,
+    }
+
+    impl StaticEnvironment {
+        fn new() -> Self {
+            Self {
+                vars: BTreeMap::new(),
+            }
+        }
+    }
+
+    impl crate::environment::Environment for StaticEnvironment {
+        fn var(&self, key: &str) -> Option<String> {
+            self.vars.get(key).cloned()
+        }
+        fn stdout_is_terminal(&self) -> bool {
+            false
+        }
+        fn stdin_is_terminal(&self) -> bool {
+            false
+        }
+    }
+
+    struct NullFactory;
+
+    impl ApiFactory for NullFactory {
+        fn build(&self, _request: &ClientRequest) -> Result<Arc<dyn HamstikApi>, CliError> {
+            Err(CliError::protocol("no api in credential tests"))
+        }
+    }
+
+    /// Builds a session whose `store` is a leaked `MemoryCredentialStore`;
+    /// the test seeds credentials through the same leaked reference via the
+    /// trait's `set` (writes are visible to the session's reads). Profile
+    /// metadata rides on the selection, not the session.
+    fn test_session() -> Session<'static> {
+        let global = crate::args::GlobalOptions {
+            host: None,
+            profile: None,
+            org: None,
+            project: None,
+            json: false,
+            quiet: false,
+            verbose: false,
+            no_color: false,
+            no_input: false,
+            no_retry: false,
+            ca_bundle: None,
+        };
+        let env = Box::new(StaticEnvironment::new());
+        let config_store = crate::config::ConfigStore::new("/tmp/kilo/cred-test-config.toml");
+        let out = Output::new(
+            Mode::Human,
+            false,
+            Box::new(Vec::new()),
+            Box::new(Vec::new()),
+        );
+        let leaked: &'static MemoryCredentialStore =
+            Box::leak(Box::new(MemoryCredentialStore::new()));
+        let leaked_dyn: &'static dyn CredentialStore = leaked;
+        let env_ref: &'static dyn crate::environment::Environment = Box::leak(env);
+        let prompt: &'static mut dyn crate::input::Prompt = Box::leak(Box::new(NullPrompt));
+        let factory: &'static dyn ApiFactory = Box::leak(Box::new(NullFactory));
+        Session {
+            out,
+            global,
+            env: env_ref,
+            store: leaked_dyn,
+            config: config_store,
+            factory,
+            prompt,
+            cwd: std::path::PathBuf::from("/tmp/kilo"),
+            exit_code: 0,
+        }
+    }
+
+    fn seed(session: &Session<'_>, host: &str, secret: &str) {
+        session
+            .store
+            .set(
+                &credentials::account_key(host, "user-1"),
+                &SecretString::from(secret.to_string()),
+            )
+            .unwrap();
+    }
+
+    fn selection_with_host(host: &str, profile_host: &str) -> Selection {
+        Selection {
+            host: Host::parse(host).unwrap(),
+            host_source: Source::Cli,
+            profile: Some("test-profile".to_string()),
+            profile_meta: Some(Profile {
+                host: profile_host.to_string(),
+                user_id: "user-1".to_string(),
+                email: "u@x".to_string(),
+                default_organization: None,
+                default_project: None,
+            }),
+            organization: ResolvedField {
+                value: None,
+                source: Source::Default,
+            },
+            project: ResolvedField {
+                value: None,
+                source: Source::Default,
+            },
+            context_path: None,
+            ephemeral_token: false,
+        }
+    }
+
+    #[test]
+    fn token_for_uses_overridden_host_credential_when_present() {
+        let session = test_session();
+        let selection = selection_with_host("https://a.example", "https://b.example");
+        seed(&session, "https://a.example", "override-token");
+        let token = session.token_for(&selection).unwrap();
+        use secrecy::ExposeSecret;
+        assert_eq!(token.expose_secret(), "override-token");
+    }
+
+    #[test]
+    fn token_for_falls_back_to_profile_host_credential() {
+        let session = test_session();
+        let selection = selection_with_host("https://a.example", "https://b.example");
+        seed(&session, "https://b.example", "profile-token");
+        let token = session.token_for(&selection).unwrap();
+        use secrecy::ExposeSecret;
+        assert_eq!(token.expose_secret(), "profile-token");
+    }
+
+    #[test]
+    fn token_for_reports_both_hosts_when_neither_matches() {
+        let session = test_session();
+        let selection = selection_with_host("https://a.example", "https://b.example");
+        let err = session.token_for(&selection).unwrap_err();
+        assert!(err.message.contains("https://a.example"), "{err}");
+        assert!(err.message.contains("https://b.example"), "{err}");
+        assert_eq!(err.exit_code(), 2);
     }
 }

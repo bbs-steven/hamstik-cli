@@ -124,6 +124,15 @@ impl CliError {
         Self::new(ErrorKind::Auth, "AUTH_REQUIRED", message)
     }
 
+    /// Builds a client-side stand-in for a server `NOT_FOUND` API error
+    /// (exit 5); used when a local lookup cannot produce the id the request
+    /// needs.
+    pub fn not_found(message: impl Into<String>) -> Self {
+        let mut error = Self::new(ErrorKind::Api, "NOT_FOUND", message);
+        error.status = Some(404);
+        error
+    }
+
     /// Maps a client (transport/API) error into a CLI error.
     pub fn from_client(err: ClientError) -> Self {
         match err {
@@ -228,6 +237,7 @@ mod tests {
             request_id: Some("req".to_string()),
             field_errors: Default::default(),
             retry_after: None,
+            rate_limit: None,
         })
     }
 
