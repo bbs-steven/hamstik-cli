@@ -300,6 +300,98 @@
             "$ref": "#/components/responses/PublicError"
           }
         }
+      },
+      "post": {
+        "operationId": "createProject",
+        "summary": "Create a Project",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the project:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "New key per logical mutation; reuse only for retries of that same request. Keys expire after 24 hours.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created Project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "409": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
       }
     },
     "/api/v1/organizations/{organizationSlug}/projects/{projectKey}": {
@@ -360,6 +452,494 @@
             "$ref": "#/components/responses/PublicError"
           },
           "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/sprints": {
+      "get": {
+        "operationId": "listProjectSprints",
+        "summary": "List Project Sprints",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the project:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Results per page (1-100, default 50).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the preceding page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sprint page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SprintList"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createProjectSprint",
+        "summary": "Create a Sprint",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the project:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "New key per logical mutation; reuse only for retries of that same request. Keys expire after 24 hours.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectSprintRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created Sprint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sprint"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string",
+                  "example": "\"sprint-1\""
+                }
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "409": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/sprints/{sprintId}": {
+      "get": {
+        "operationId": "getProjectSprint",
+        "summary": "Get a Project Sprint",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the project:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sprintId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sprint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sprint"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string",
+                  "example": "\"sprint-1\""
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/sprints/{sprintId}/transitions": {
+      "get": {
+        "operationId": "listProjectSprintTransitions",
+        "summary": "Discover available Sprint transitions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the project:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sprintId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Available Sprint transitions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSprintTransitionList"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "transitionProjectSprint",
+        "summary": "Transition a Project Sprint",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the project:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sprintId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "Exact quoted Sprint ETag (for example, \"sprint-4\") or *. Weak ETags and comma-separated lists are invalid.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:\\*|\"sprint-[1-9][0-9]*\")$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "New key per logical mutation; reuse only for retries of that same request. Keys expire after 24 hours.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitionProjectSprintRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transitioned Sprint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sprint"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string",
+                  "example": "\"sprint-2\""
+                }
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "409": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "412": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "428": {
             "$ref": "#/components/responses/PublicError"
           },
           "429": {
@@ -696,6 +1276,213 @@
               },
               "Idempotency-Replayed": {
                 "description": "Present and true when a completed create is replayed.",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "409": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/labels": {
+      "get": {
+        "operationId": "listProjectLabels",
+        "summary": "List Project labels",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the project:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Results per page (1-100, default 50).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the preceding page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project label page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectLabelList"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createProjectLabel",
+        "summary": "Create a Project label",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the project:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "New key per logical mutation; reuse only for retries of that same request. Keys expire after 24 hours.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#[0-9a-f]{6}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created Project label.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectLabel"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "Idempotency-Replayed": {
                 "schema": {
                   "type": "boolean"
                 }
@@ -1133,6 +1920,272 @@
         }
       }
     },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/work-items/{workItemKey}/labels": {
+      "post": {
+        "operationId": "createWorkItemLabelAssignment",
+        "summary": "Attach a label to a Work Item",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the work_item:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "Exact quoted ETag (for example, \"wi-4\") or * for an explicit last-write-wins update. Weak ETags and comma-separated lists are invalid.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:\\*|\"wi-[1-9][0-9]*\")$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "New key per logical mutation; reuse only for retries of that same request. Keys expire after 24 hours.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "labelId"
+                ],
+                "properties": {
+                  "labelId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Work Item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string",
+                  "example": "\"wi-5\""
+                }
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "412": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "428": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/work-items/{workItemKey}/labels/{labelId}": {
+      "delete": {
+        "operationId": "deleteWorkItemLabelAssignment",
+        "summary": "Detach a label from a Work Item",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the work_item:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "labelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "Exact quoted ETag (for example, \"wi-4\") or * for an explicit last-write-wins update. Weak ETags and comma-separated lists are invalid.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:\\*|\"wi-[1-9][0-9]*\")$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "New key per logical mutation; reuse only for retries of that same request. Keys expire after 24 hours.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated Work Item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string",
+                  "example": "\"wi-5\""
+                }
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "412": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "428": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
     "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/work-items/{workItemKey}/comments": {
       "get": {
         "operationId": "listWorkItemComments",
@@ -1340,6 +2393,473 @@
           }
         }
       }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/work-items/{workItemKey}/comments/{commentId}": {
+      "delete": {
+        "operationId": "deleteWorkItemComment",
+        "summary": "Delete an authored Work Item comment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the comment:delete scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Comment removed. The comment remains as a deleted placeholder for thread structure.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "409": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/work-items/{workItemKey}/attachments": {
+      "get": {
+        "operationId": "listWorkItemAttachments",
+        "summary": "List Work Item attachments",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the attachment:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Results per page (1-200, default 50).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the preceding page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Attachment metadata page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentList"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkItemAttachment",
+        "summary": "Add an attachment to a Work Item",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the attachment:write scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "New key per logical mutation; reuse only for retries of that same request. Keys expire after 24 hours.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created attachment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "Location": {
+                "description": "Canonical attachment URL.",
+                "schema": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "413": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationSlug}/projects/{projectKey}/work-items/{workItemKey}/attachments/{attachmentId}": {
+      "get": {
+        "operationId": "downloadWorkItemAttachment",
+        "summary": "Download a Work Item attachment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the attachment:read scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attachmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Attachment bytes.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWorkItemAttachment",
+        "summary": "Delete a Work Item attachment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "Requires the attachment:delete scope. User authorization and PAT resource restrictions still apply.",
+        "parameters": [
+          {
+            "name": "organizationSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workItemKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attachmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Attachment removed.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Server-generated request correlation identifier.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "403": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "404": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "429": {
+            "$ref": "#/components/responses/PublicError"
+          },
+          "500": {
+            "$ref": "#/components/responses/PublicError"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1409,6 +2929,10 @@
               "IDEMPOTENCY_REQUEST_IN_PROGRESS",
               "WORK_ITEM_STATUS_REQUIRES_TRANSITION",
               "INVALID_STATUS_TRANSITION",
+              "INVALID_SPRINT_TRANSITION",
+              "ACTIVE_SPRINT_EXISTS",
+              "SPRINT_HAS_UNFINISHED_WORK_ITEMS",
+              "INVALID_COMPLETION_TARGET",
               "RATE_LIMITED",
               "PAYLOAD_TOO_LARGE",
               "INTERNAL_ERROR"
@@ -1506,19 +3030,31 @@
           }
         }
       },
+      "PublicUserId": {
+        "type": "string",
+        "pattern": "^usr_[A-Za-z0-9_-]{21}[AQgw]$",
+        "minLength": 26,
+        "maxLength": 26,
+        "example": "usr_cPbfeqnghA-RLpDVOMQhHg"
+      },
       "Me": {
         "type": "object",
         "required": [
           "id",
+          "publicId",
           "name",
           "email",
           "authentication",
-          "defaultOrganization"
+          "defaultOrganization",
+          "organizations"
         ],
         "properties": {
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "publicId": {
+            "$ref": "#/components/schemas/PublicUserId"
           },
           "name": {
             "type": "string"
@@ -1539,6 +3075,36 @@
                 "type": "null"
               }
             ]
+          },
+          "organizations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "slug",
+                "name",
+                "username"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "slug": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "username": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
           }
         }
       },
@@ -1750,6 +3316,132 @@
           }
         }
       },
+      "Sprint": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "state",
+          "startDate",
+          "endDate",
+          "goal",
+          "targetPoints",
+          "createdAt",
+          "updatedAt",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "future",
+              "active",
+              "done"
+            ]
+          },
+          "startDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "endDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "goal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "targetPoints": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "SprintList": {
+        "type": "object",
+        "required": [
+          "items",
+          "page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Sprint"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "ProjectSprintTransition": {
+        "type": "object",
+        "required": [
+          "targetState",
+          "requiresCompletionAction"
+        ],
+        "properties": {
+          "targetState": {
+            "type": "string",
+            "enum": [
+              "active",
+              "done"
+            ]
+          },
+          "requiresCompletionAction": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProjectSprintTransitionList": {
+        "type": "object",
+        "required": [
+          "currentState",
+          "transitions"
+        ],
+        "properties": {
+          "currentState": {
+            "type": "string"
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectSprintTransition"
+            }
+          }
+        }
+      },
       "Label": {
         "type": "object",
         "required": [
@@ -1767,6 +3459,50 @@
           },
           "color": {
             "type": "string"
+          }
+        }
+      },
+      "ProjectLabel": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "color",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProjectLabelList": {
+        "type": "object",
+        "required": [
+          "items",
+          "page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectLabel"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
           }
         }
       },
@@ -2173,6 +3909,70 @@
           }
         }
       },
+      "Attachment": {
+        "type": "object",
+        "required": [
+          "id",
+          "workItemId",
+          "fileName",
+          "contentType",
+          "size",
+          "createdBy",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workItemId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "createdBy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AttachmentList": {
+        "type": "object",
+        "required": [
+          "items",
+          "page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
       "Page": {
         "type": "object",
         "required": [
@@ -2207,7 +4007,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 50000
+                "maxLength": 64000
               },
               {
                 "type": "null"
@@ -2321,7 +4121,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 50000
+                "maxLength": 64000
               },
               {
                 "type": "null"
@@ -2448,6 +4248,152 @@
         },
         "required": [
           "body"
+        ],
+        "additionalProperties": false
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "key": {
+            "type": "string",
+            "maxLength": 4
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "color": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "CreateProjectSprintRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "startDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "targetPoints": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "TransitionProjectSprintRequest": {
+        "type": "object",
+        "properties": {
+          "targetState": {
+            "type": "string",
+            "enum": [
+              "active",
+              "done"
+            ]
+          },
+          "completionAction": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "backlog"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "sprint"
+                  },
+                  "targetSprintId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "targetSprintId"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "targetState"
         ],
         "additionalProperties": false
       }

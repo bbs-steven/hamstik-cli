@@ -109,13 +109,19 @@ The Dogfooding Alpha is implemented. Today the CLI provides:
 - working context — `hamstik context show|set|clear|init` backed by a
   project-local `.hamstik.toml` plus global profile defaults;
 - organizations and projects — `hamstik org ...` and `hamstik project ...`
-  (`list`, `view`, `use`);
+  (`list`, `view`, `create`, `use`);
+- sprints — `hamstik sprint list|view|create|transitions|transition` with
+  completion actions for sprints that still have unfinished work items;
+- labels — `hamstik label list|create` and `hamstik work label add|remove`
+  (attach/detach with Work Item revision protection);
 - work items — `hamstik work list|view|create|edit`, status transitions
-  (`transitions`, `transition`, `start`, `close`), and comments
-  (`work comment list|add`);
+  (`transitions`, `transition`, `start`, `close`), comments
+  (`work comment list|add|delete`), and attachments
+  (`work attachment list|upload|download|delete`);
 - automation-friendly output via `--json` / `--quiet` and stable exit codes;
-- shell completions (`hamstik completion <shell>`) and connectivity
-  diagnostics (`hamstik doctor`);
+- shell completions (`hamstik completion <shell>`), connectivity
+  diagnostics (`hamstik doctor`) including terminal rendering checks
+  (color/emoji probes with visual samples), and ANSI-free `--json` output;
 - cross-platform CI on Linux, Windows, and macOS.
 
 OAuth, the MCP server, and the Agent Skill remain future work. See the

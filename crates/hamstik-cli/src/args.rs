@@ -89,6 +89,10 @@ pub enum Command {
     Org(OrgArgs),
     /// Work with projects.
     Project(ProjectArgs),
+    /// Work with sprints.
+    Sprint(SprintArgs),
+    /// Work with labels.
+    Label(LabelArgs),
     /// Work with work items.
     Work(Box<WorkArgs>),
     /// Verify configuration, credentials, and connectivity.
@@ -214,10 +218,157 @@ pub enum ProjectCommand {
         /// Project key.
         key: String,
     },
+    /// Create a project (Organization administrators only).
+    Create(ProjectCreateArgs),
     /// Set the default project for the active profile.
     Use {
         /// Project key.
         key: String,
+    },
+}
+
+/// Arguments for `project create`.
+#[derive(Args, Debug)]
+pub struct ProjectCreateArgs {
+    /// Project name.
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Project key (defaults to the server's canonical suggestion from the name).
+    #[arg(long, value_name = "KEY")]
+    pub key: Option<String>,
+    /// Description text.
+    #[arg(long, conflicts_with = "description_file")]
+    pub description: Option<String>,
+    /// Description source (path, or - for stdin).
+    #[arg(long = "description-file", value_name = "PATH")]
+    pub description_file: Option<String>,
+    /// Display color as a hex string (e.g. #3b82f6).
+    #[arg(long, value_name = "HEX")]
+    pub color: Option<String>,
+    /// Explicit idempotency key.
+    #[arg(long = "idempotency-key", value_name = "KEY")]
+    pub idempotency_key: Option<String>,
+}
+
+/// Arguments for the `sprint` command group.
+#[derive(Args, Debug)]
+pub struct SprintArgs {
+    /// The sprint subcommand to run.
+    #[command(subcommand)]
+    pub command: SprintCommand,
+}
+
+/// Sprint subcommands.
+#[derive(Subcommand, Debug)]
+pub enum SprintCommand {
+    /// List sprints in a project.
+    List {
+        /// Project key (overrides context).
+        #[arg(long)]
+        project: Option<String>,
+        /// Pagination options.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
+    /// View a sprint.
+    View {
+        /// Sprint id (UUID).
+        id: String,
+        /// Project key (overrides context).
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Create a sprint.
+    Create {
+        /// Sprint name.
+        #[arg(long)]
+        name: Option<String>,
+        /// Planned start date (RFC 3339).
+        #[arg(long = "start-date", value_name = "RFC3339")]
+        start_date: Option<String>,
+        /// Planned end date (RFC 3339).
+        #[arg(long = "end-date", value_name = "RFC3339")]
+        end_date: Option<String>,
+        /// Sprint goal.
+        #[arg(long, value_name = "TEXT")]
+        goal: Option<String>,
+        /// Target story-point total.
+        #[arg(long = "target-points", value_name = "N")]
+        target_points: Option<i64>,
+        /// Project key (overrides context).
+        #[arg(long)]
+        project: Option<String>,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// List allowed sprint state transitions.
+    Transitions {
+        /// Sprint id (UUID).
+        id: String,
+        /// Project key (overrides context).
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Transition a sprint to a target state.
+    Transition {
+        /// Sprint id (UUID).
+        id: String,
+        /// Target state.
+        #[arg(value_enum)]
+        target: SprintStateArg,
+        /// Move unfinished work items back to the backlog when completing.
+        #[arg(long = "move-to-backlog")]
+        move_to_backlog: bool,
+        /// Move unfinished work items to this future sprint.
+        #[arg(long = "move-to-sprint", value_name = "SPRINT_ID")]
+        move_to_sprint: Option<String>,
+        /// Bypass revision conflict protection (If-Match: *).
+        #[arg(long)]
+        force: bool,
+        /// Project key (overrides context).
+        #[arg(long)]
+        project: Option<String>,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+}
+
+/// Arguments for the `label` command group.
+#[derive(Args, Debug)]
+pub struct LabelArgs {
+    /// The label subcommand to run.
+    #[command(subcommand)]
+    pub command: LabelCommand,
+}
+
+/// Label subcommands.
+#[derive(Subcommand, Debug)]
+pub enum LabelCommand {
+    /// List labels in a project.
+    List {
+        /// Project key (overrides context).
+        #[arg(long)]
+        project: Option<String>,
+        /// Pagination options.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
+    /// Create a project label (Organization administrators only).
+    Create {
+        /// Label name (stored lowercase).
+        #[arg(long)]
+        name: Option<String>,
+        /// Display color as a hex string.
+        #[arg(long, value_name = "HEX")]
+        color: Option<String>,
+        /// Project key (overrides context).
+        #[arg(long)]
+        project: Option<String>,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
     },
 }
 
@@ -280,6 +431,10 @@ pub enum WorkCommand {
         /// Work item key.
         key: String,
     },
+    /// Manage work item labels.
+    Label(WorkLabelArgs),
+    /// Manage work item attachments.
+    Attachment(WorkAttachmentArgs),
     /// Manage work item comments.
     Comment(CommentArgs),
 }
@@ -478,6 +633,108 @@ pub enum CommentCommand {
         #[arg(long = "idempotency-key", value_name = "KEY")]
         idempotency_key: Option<String>,
     },
+    /// Delete your own comment (only when it has no replies).
+    Delete {
+        /// Work item key.
+        key: String,
+        /// Comment id (UUID).
+        comment_id: String,
+    },
+}
+
+/// Arguments for the `work label` command group.
+#[derive(Args, Debug)]
+pub struct WorkLabelArgs {
+    /// The label subcommand to run.
+    #[command(subcommand)]
+    pub command: WorkLabelCommand,
+}
+
+/// Work item label subcommands.
+#[derive(Subcommand, Debug)]
+pub enum WorkLabelCommand {
+    /// Attach a label to a work item.
+    Add {
+        /// Work item key.
+        key: String,
+        /// Label id (UUID).
+        #[arg(long)]
+        label: String,
+        /// Bypass revision conflict protection (If-Match: *).
+        #[arg(long)]
+        force: bool,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Detach a label from a work item.
+    Remove {
+        /// Work item key.
+        key: String,
+        /// Label id (UUID).
+        #[arg(long)]
+        label: String,
+        /// Bypass revision conflict protection (If-Match: *).
+        #[arg(long)]
+        force: bool,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+}
+
+/// Arguments for the `work attachment` command group.
+#[derive(Args, Debug)]
+pub struct WorkAttachmentArgs {
+    /// The attachment subcommand to run.
+    #[command(subcommand)]
+    pub command: WorkAttachmentCommand,
+}
+
+/// Work item attachment subcommands.
+#[derive(Subcommand, Debug)]
+pub enum WorkAttachmentCommand {
+    /// List attachments on a work item.
+    List {
+        /// Work item key.
+        key: String,
+        /// Pagination options.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
+    /// Upload an attachment.
+    Upload {
+        /// Work item key.
+        key: String,
+        /// File to upload, or - for stdin.
+        file: String,
+        /// File name recorded with the attachment (defaults to the file name).
+        #[arg(long = "file-name", value_name = "NAME")]
+        file_name: Option<String>,
+        /// Content type (defaults to a guess or application/octet-stream).
+        #[arg(long = "content-type", value_name = "TYPE")]
+        content_type: Option<String>,
+        /// Explicit idempotency key.
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Download an attachment to a file.
+    Download {
+        /// Work item key.
+        key: String,
+        /// Attachment id (UUID).
+        attachment_id: String,
+        /// Output path (defaults to the attachment's file name in the current directory).
+        #[arg(long = "output", value_name = "PATH", short = 'o')]
+        output: Option<String>,
+    },
+    /// Delete an attachment (creator or Organization administrator).
+    Delete {
+        /// Work item key.
+        key: String,
+        /// Attachment id (UUID).
+        attachment_id: String,
+    },
 }
 
 /// Arguments for `completion`.
@@ -598,6 +855,28 @@ impl ScopeArg {
             ScopeArg::All => "all",
             ScopeArg::Open => "open",
             ScopeArg::Closed => "closed",
+        }
+    }
+}
+
+/// Sprint lifecycle states (request-side validation).
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SprintStateArg {
+    /// Scheduled but not started.
+    #[value(name = "active")]
+    Active,
+    /// Completed.
+    #[value(name = "done")]
+    Done,
+}
+
+impl SprintStateArg {
+    /// The wire value for this sprint state.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SprintStateArg::Active => "active",
+            SprintStateArg::Done => "done",
         }
     }
 }

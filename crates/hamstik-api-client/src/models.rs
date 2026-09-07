@@ -60,6 +60,9 @@ pub struct ListWorkItemsQuery {
 pub struct Me {
     /// The user's id.
     pub id: String,
+    /// The user's immutable public identifier (e.g. `usr_...`).
+    #[serde(default)]
+    pub public_id: Option<String>,
     /// The user's display name.
     pub name: String,
     /// The user's email address.
@@ -68,6 +71,28 @@ pub struct Me {
     pub authentication: AuthenticationContext,
     /// The user's default organization, when one is set.
     pub default_organization: Option<OrganizationSummary>,
+    /// The Organizations available through the credential, each with the
+    /// Organization-scoped username.
+    #[serde(default)]
+    pub organizations: Vec<MeOrganization>,
+}
+
+/// An Organization available to the authenticated user.
+///
+/// A username is a membership identity unique only inside its Organization
+/// and may be absent when the membership has no username.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeOrganization {
+    /// The organization's id.
+    pub id: String,
+    /// The organization's URL slug.
+    pub slug: String,
+    /// The organization's display name.
+    pub name: String,
+    /// The user's username inside this Organization, when one is set.
+    #[serde(default)]
+    pub username: Option<String>,
 }
 
 /// How the current request was authenticated.
@@ -219,7 +244,63 @@ pub struct SprintSummary {
     pub state: String,
 }
 
-/// A label resource.
+/// A full Sprint resource.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sprint {
+    /// The sprint's id.
+    pub id: String,
+    /// The sprint's display name.
+    pub name: String,
+    /// The sprint's lifecycle state (`future`, `active`, or `done`).
+    pub state: String,
+    /// Planned start date (RFC 3339), when the Sprint is dated.
+    pub start_date: Option<String>,
+    /// Planned end date (RFC 3339), when the Sprint is dated.
+    pub end_date: Option<String>,
+    /// The Sprint goal, when set.
+    pub goal: Option<String>,
+    /// The target story-point total, when set.
+    pub target_points: Option<i64>,
+    /// Creation timestamp (RFC 3339).
+    pub created_at: String,
+    /// Last-update timestamp (RFC 3339).
+    pub updated_at: String,
+    /// Optimistic-concurrency revision (matches the `sprint-N` `ETag`).
+    pub revision: i64,
+}
+
+/// A paginated Sprint list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SprintList {
+    /// One page of sprints.
+    pub items: Vec<Sprint>,
+    /// Pagination metadata.
+    pub page: Page,
+}
+
+/// One permitted Sprint state transition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SprintTransition {
+    /// The state this transition moves the Sprint to (`active` or `done`).
+    pub target_state: String,
+    /// Whether completing this Sprint requires a completion action
+    /// (unfinished Work Items remain).
+    pub requires_completion_action: bool,
+}
+
+/// The transition surface of a Sprint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SprintTransitionList {
+    /// The Sprint's current state.
+    pub current_state: String,
+    /// Transitions permitted from the current state.
+    pub transitions: Vec<SprintTransition>,
+}
+
+/// A label resource on a work item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Label {
     /// The label's id.
@@ -228,6 +309,29 @@ pub struct Label {
     pub name: String,
     /// Display color as a hex string.
     pub color: String,
+}
+
+/// A Project label resource (from the Project label list/create endpoints).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectLabel {
+    /// The label's id.
+    pub id: String,
+    /// The label's display name (stored lowercase).
+    pub name: String,
+    /// Display color as a hex string.
+    pub color: String,
+    /// Creation timestamp (RFC 3339).
+    pub created_at: String,
+}
+
+/// A paginated Project label list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectLabelList {
+    /// One page of labels.
+    pub items: Vec<ProjectLabel>,
+    /// Pagination metadata.
+    pub page: Page,
 }
 
 /// A work item in list responses (summary shape).
@@ -383,6 +487,35 @@ pub struct CommentList {
     pub page: Page,
 }
 
+/// A Work Item attachment resource.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    /// The attachment's id.
+    pub id: String,
+    /// The id of the work item the attachment belongs to.
+    pub work_item_id: String,
+    /// The sanitized file name.
+    pub file_name: String,
+    /// The MIME content type.
+    pub content_type: String,
+    /// The file size in bytes.
+    pub size: i64,
+    /// The creator, when recorded.
+    pub created_by: Option<UserSummary>,
+    /// Creation timestamp (RFC 3339).
+    pub created_at: String,
+}
+
+/// A paginated attachment list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentList {
+    /// One page of attachments.
+    pub items: Vec<Attachment>,
+    /// Pagination metadata.
+    pub page: Page,
+}
+
 /// Body for `POST .../work-items`.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -489,6 +622,81 @@ pub struct CreateCommentRequest {
     pub parent_comment_id: Option<String>,
 }
 
+/// Body for `POST .../projects`.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectRequest {
+    /// The new project's name (required).
+    pub name: String,
+    /// The project's short key; omitted to use the server's canonical
+    /// suggestion from the name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Free-form description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Display color as a hex string (e.g. `#3b82f6`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// Body for `POST .../sprints`.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSprintRequest {
+    /// The new sprint's name (required).
+    pub name: String,
+    /// Planned start date (RFC 3339); `Some(None)` sends an explicit null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<Option<String>>,
+    /// Planned end date (RFC 3339); `Some(None)` sends an explicit null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<Option<String>>,
+    /// The Sprint goal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
+    /// The target story-point total.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_points: Option<i64>,
+}
+
+/// What happens to unfinished Work Items when a Sprint is completed.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "mode", rename_all_fields = "camelCase")]
+pub enum CompletionAction {
+    /// Move unfinished Work Items back to the backlog.
+    #[serde(rename = "backlog")]
+    Backlog,
+    /// Move unfinished Work Items to a future Sprint in the same Project.
+    #[serde(rename = "sprint")]
+    Sprint {
+        /// The future Sprint that receives the unfinished Work Items.
+        target_sprint_id: String,
+    },
+}
+
+/// Body for `POST .../sprints/{id}/transitions`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionSprintRequest {
+    /// The state to move the Sprint to (`active` or `done`).
+    pub target_state: String,
+    /// Required when completing a Sprint with unfinished Work Items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_action: Option<CompletionAction>,
+}
+
+/// Body for `POST .../labels` (create a Project label).
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLabelRequest {
+    /// The label's name (trimmed and stored lowercase by the server).
+    pub name: String,
+    /// Display color as a hex string; the server defaults to `#6366f1`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
 #[cfg(test)]
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -543,11 +751,84 @@ mod tests {
     #[test]
     fn me_parses_camel_case() {
         let raw = r##"{
+            "id":"u1","publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"N","email":"n@x",
+            "authentication":{"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
+            "defaultOrganization":null,
+            "organizations":[{"id":"o1","slug":"acme","name":"Acme","username":"n"}]
+        }"##;
+        let me: Me = serde_json::from_str(raw).unwrap();
+        assert_eq!(me.authentication.expires_at, "2027-01-01T00:00:00Z");
+        assert_eq!(me.public_id.as_deref(), Some("usr_cPbfeqnghA-RLpDVOMQhHg"));
+        assert_eq!(me.organizations[0].username.as_deref(), Some("n"));
+    }
+
+    #[test]
+    fn me_accepts_legacy_shape_without_new_fields() {
+        let raw = r##"{
             "id":"u1","name":"N","email":"n@x",
             "authentication":{"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
             "defaultOrganization":null
         }"##;
         let me: Me = serde_json::from_str(raw).unwrap();
-        assert_eq!(me.authentication.expires_at, "2027-01-01T00:00:00Z");
+        assert_eq!(me.public_id, None);
+        assert!(me.organizations.is_empty());
+    }
+
+    #[test]
+    fn sprint_roundtrips_full_resource() {
+        let raw = r##"{
+            "id":"s1","name":"Sprint 1","state":"active","startDate":"2026-09-01T00:00:00Z",
+            "endDate":null,"goal":"Ship","targetPoints":40,
+            "createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z","revision":2
+        }"##;
+        let sprint: Sprint = serde_json::from_str(raw).unwrap();
+        assert_eq!(sprint.state, "active");
+        assert_eq!(sprint.target_points, Some(40));
+        assert_eq!(sprint.revision, 2);
+    }
+
+    #[test]
+    fn sprint_transition_list_parses() {
+        let raw = r##"{
+            "currentState":"active",
+            "transitions":[{"targetState":"done","requiresCompletionAction":true}]
+        }"##;
+        let list: SprintTransitionList = serde_json::from_str(raw).unwrap();
+        assert_eq!(list.current_state, "active");
+        assert!(list.transitions[0].requires_completion_action);
+    }
+
+    #[test]
+    fn attachment_parses_camel_case() {
+        let raw = r##"{
+            "id":"a1","workItemId":"w1","fileName":"design.png","contentType":"image/png",
+            "size":1234,"createdBy":{"id":"u","name":"U"},"createdAt":"2026-01-01T00:00:00Z"
+        }"##;
+        let attachment: Attachment = serde_json::from_str(raw).unwrap();
+        assert_eq!(attachment.file_name, "design.png");
+        assert_eq!(attachment.size, 1234);
+    }
+
+    #[test]
+    fn completion_action_serializes_tagged() {
+        let backlog = serde_json::to_value(CompletionAction::Backlog).unwrap();
+        assert_eq!(backlog["mode"], "backlog");
+        let sprint = serde_json::to_value(CompletionAction::Sprint {
+            target_sprint_id: "s2".into(),
+        })
+        .unwrap();
+        assert_eq!(sprint["mode"], "sprint");
+        assert_eq!(sprint["targetSprintId"], "s2");
+    }
+
+    #[test]
+    fn create_sprint_request_omits_unset_nullables() {
+        let req = CreateSprintRequest {
+            name: "S".into(),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&req).unwrap();
+        assert!(value.get("startDate").is_none());
+        assert!(value.get("targetPoints").is_none());
     }
 }

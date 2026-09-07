@@ -1,15 +1,16 @@
 // Copyright 2026 Blackboard Studios
 // SPDX-License-Identifier: Apache-2.0
 
-//! `hamstik project` (list / view / use).
+//! `hamstik project` (list / view / create / use).
 
 use serde_json::json;
 
-use hamstik_api_client::{ListOptions, Project};
+use hamstik_api_client::{CreateProjectRequest, ListOptions, Project, generate_key, validate_key};
 
 use crate::app::Session;
 use crate::args::{PaginationArgs, ProjectArgs, ProjectCommand};
 use crate::error::CliError;
+use crate::input::resolve_text;
 
 use super::org::render_lines;
 use super::{emit_json, emit_table, emit_view};
@@ -19,6 +20,7 @@ pub async fn run(session: &mut Session<'_>, args: &ProjectArgs) -> Result<(), Cl
     match &args.command {
         ProjectCommand::List(pagination) => list(session, pagination).await,
         ProjectCommand::View { key } => view(session, key).await,
+        ProjectCommand::Create(create_args) => create(session, create_args).await,
         ProjectCommand::Use { key } => use_project(session, key).await,
     }
 }
@@ -62,6 +64,75 @@ async fn view(session: &mut Session<'_>, key: &str) -> Result<(), CliError> {
         .map_err(CliError::from_client)?;
     let project: Project = response.value.clone();
     emit_view(session, &response.raw, key, |session| {
+        let lines = [
+            ("name", project.name.clone()),
+            ("key", project.key.clone()),
+            ("color", project.color.clone()),
+            (
+                "description",
+                project.description.clone().unwrap_or_default(),
+            ),
+        ];
+        render_lines(session, &lines)
+    })
+}
+
+async fn create(
+    session: &mut Session<'_>,
+    args: &crate::args::ProjectCreateArgs,
+) -> Result<(), CliError> {
+    let selection = session.selection()?;
+    let org = session.require_org(&selection)?;
+
+    let name = match &args.name {
+        Some(name) => name.clone(),
+        None if session.can_prompt() => session
+            .prompt
+            .read_line("Name: ")
+            .map_err(|err| CliError::general(format!("prompt failed: {err}")))?,
+        None => return Err(CliError::usage("missing required option --name")),
+    };
+    if name.trim().is_empty() {
+        return Err(CliError::usage("name must not be empty"));
+    }
+    let description = resolve_text(
+        args.description.clone(),
+        args.description_file.as_deref(),
+        &mut std::io::stdin(),
+    )
+    .map_err(|err| CliError::general(format!("cannot read text: {err}")))?;
+    if let Some(key) = &args.key
+        && key.trim().is_empty()
+    {
+        return Err(CliError::usage("key must not be empty"));
+    }
+
+    let body = CreateProjectRequest {
+        name,
+        key: args.key.clone(),
+        description,
+        color: args.color.clone(),
+    };
+    let idempotency = match &args.idempotency_key {
+        Some(key) => {
+            validate_key(key).map_err(|err| CliError::usage(err.to_string()))?;
+            key.clone()
+        }
+        None => generate_key(),
+    };
+
+    let api = session.api(&selection)?;
+    let response = api
+        .create_project(&org, &body, &idempotency)
+        .await
+        .map_err(CliError::from_client)?;
+    if response.idempotency_replayed {
+        session
+            .out
+            .warn("note: request replayed (idempotent duplicate)");
+    }
+    let project = response.value.clone();
+    emit_view(session, &response.raw, &project.key.clone(), |session| {
         let lines = [
             ("name", project.name.clone()),
             ("key", project.key.clone()),

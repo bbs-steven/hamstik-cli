@@ -137,7 +137,13 @@ async fn status(session: &mut Session<'_>) -> Result<(), CliError> {
                 "authenticated": true,
                 "host": selection.host.as_str(),
                 "profile": selection.profile,
-                "user": { "id": me.value.id, "email": me.value.email, "name": me.value.name },
+                "user": {
+                    "id": me.value.id,
+                    "publicId": me.value.public_id,
+                    "email": me.value.email,
+                    "name": me.value.name,
+                    "organizations": me.value.organizations,
+                },
                 "credential": {
                     "name": me.value.authentication.credential_name,
                     "expiresAt": me.value.authentication.expires_at,
@@ -168,6 +174,22 @@ async fn status(session: &mut Session<'_>) -> Result<(), CliError> {
                     me.value.authentication.scopes.join(", ")
                 ))
                 .map_err(CliError::general)?;
+        }
+        if !me.value.organizations.is_empty() {
+            session
+                .out
+                .line("  memberships:")
+                .map_err(CliError::general)?;
+            for org in &me.value.organizations {
+                let username = org.username.clone().unwrap_or_else(|| "-".to_string());
+                session
+                    .out
+                    .line(&format!(
+                        "    {} ({}, username: {username})",
+                        org.slug, org.name
+                    ))
+                    .map_err(CliError::general)?;
+            }
         }
         Ok(())
     }

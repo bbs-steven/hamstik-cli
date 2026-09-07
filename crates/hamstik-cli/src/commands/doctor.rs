@@ -1,7 +1,8 @@
 // Copyright 2026 Blackboard Studios
 // SPDX-License-Identifier: Apache-2.0
 
-//! `hamstik doctor` — verify configuration, credentials, and connectivity.
+//! `hamstik doctor` — verify configuration, credentials, connectivity, and
+//! terminal rendering.
 
 use secrecy::SecretString;
 use serde_json::json;
@@ -10,8 +11,13 @@ use crate::app::Session;
 use crate::credentials;
 use crate::error::CliError;
 use crate::exit;
+use crate::terminal::{SGR_GREEN, SGR_RED, SGR_YELLOW, color_probe, emoji_probe, paint};
 
 use super::emit_json;
+
+/// The emoji sample rendered so users can visually confirm their terminal
+/// shows the mascot instead of tofu boxes. U+1F439 is the hamster face.
+const EMOJI_SAMPLE: &str = "🐹 🐹 🐹";
 
 /// A single diagnostic line.
 ///
@@ -140,7 +146,28 @@ pub async fn run(session: &mut Session<'_>) -> Result<(), CliError> {
         }
     }
 
+    // Terminal rendering checks are informational: a dumb or piped terminal is
+    // a working configuration, just a monochrome/plain-text one.
+    checks.push(color_check(session));
+    checks.push(emoji_check(session));
+
     render(session, checks, code)
+}
+
+/// Probes ANSI color support for this invocation's stdout.
+fn color_check(session: &Session<'_>) -> Check {
+    let probe = color_probe(
+        session.env,
+        session.global.no_color,
+        session.env.stdout_is_terminal(),
+    );
+    Check::info("terminal color", probe.ok, probe.detail)
+}
+
+/// Probes emoji support for this invocation's stdout.
+fn emoji_check(session: &Session<'_>) -> Check {
+    let probe = emoji_probe(session.env, session.env.stdout_is_terminal());
+    Check::info("terminal emoji", probe.ok, probe.detail)
 }
 
 /// Reports whether a persistent credential store is reachable.
@@ -191,21 +218,58 @@ fn render(session: &mut Session<'_>, checks: Vec<Check>, code: i32) -> Result<()
             .collect();
         emit_json(session, &json!({ "checks": items, "ok": overall_ok }))?;
     } else if !session.out.is_quiet() {
+        // Colors apply to the doctor output itself only when the terminal
+        // probe says they are safe; `--no-color` and piped stdout stay plain.
+        let color = color_probe(
+            session.env,
+            session.global.no_color,
+            session.env.stdout_is_terminal(),
+        )
+        .ok;
         for check in &checks {
-            let marker = match (check.ok, check.critical) {
-                (true, _) => "ok",
-                (false, true) => "FAIL",
-                (false, false) => "info",
+            let (marker, sgr) = match (check.ok, check.critical) {
+                (true, _) => ("ok", SGR_GREEN),
+                (false, true) => ("FAIL", SGR_RED),
+                (false, false) => ("info", SGR_YELLOW),
             };
+            let marker = paint(color, sgr, marker);
             session
                 .out
-                .line(&format!("[{marker:4}] {:<18} {}", check.name, check.detail))
+                .line(&format!(
+                    "[{marker:<4}] {:<18} {}",
+                    check.name, check.detail
+                ))
                 .map_err(CliError::general)?;
         }
         session
             .out
             .line(if overall_ok { "ready." } else { "not ready." })
             .map_err(CliError::general)?;
+        // Visual rendering samples (human mode only; never in --json):
+        // if the emoji row shows boxes or the color row shows escape codes,
+        // this terminal will mangle decorated CLI output.
+        let emoji_ok = checks.iter().any(|c| c.name == "terminal emoji" && c.ok);
+        session
+            .out
+            .line(&format!(
+                "emoji sample: {EMOJI_SAMPLE}{}",
+                if emoji_ok {
+                    ""
+                } else {
+                    " (expected above; boxes mean your terminal lacks emoji)"
+                }
+            ))
+            .map_err(CliError::general)?;
+        if color {
+            let swatches = format!(
+                "{}green{} {}red{} {}yellow{}",
+                SGR_GREEN, "\x1b[0m", SGR_RED, "\x1b[0m", SGR_YELLOW, "\x1b[0m",
+            );
+            session
+                .out
+                .line(&format!("color sample: {swatches}"))
+                .map_err(CliError::general)?;
+        }
     }
 
     session.exit_code = code;

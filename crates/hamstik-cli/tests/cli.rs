@@ -323,6 +323,209 @@ async fn doctor_reports_ready_when_authenticated() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn doctor_reports_terminal_capabilities_in_json() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    // The test harness pipes stdout, so color is reported disabled for that
+    // reason — the check reflects the actual invocation, not a hypothetical.
+    let body: Value = serde_json::from_slice(
+        &base(&server, &dir)
+            .args(["doctor", "--json"])
+            .env("TERM", "xterm-256color")
+            .env("LANG", "en_US.UTF-8")
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let rendered = serde_json::to_string(&body).unwrap();
+    assert!(!rendered.contains('\u{1b}'), "--json never carries ANSI");
+    let checks = body["checks"].as_array().unwrap();
+    let color = checks
+        .iter()
+        .find(|c| c["name"] == "terminal color")
+        .expect("color check present");
+    assert_eq!(color["ok"], false);
+    assert_eq!(color["critical"], false);
+    assert!(
+        color["detail"]
+            .as_str()
+            .unwrap()
+            .contains("stdout is not a terminal")
+    );
+    let emoji = checks
+        .iter()
+        .find(|c| c["name"] == "terminal emoji")
+        .expect("emoji check present");
+    assert_eq!(emoji["critical"], false);
+    assert!(emoji["detail"].as_str().unwrap().contains("not verifiable"));
+
+    // CLICOLOR_FORCE forces color on even for a piped stdout.
+    let body: Value = serde_json::from_slice(
+        &base(&server, &dir)
+            .args(["doctor", "--json"])
+            .env("CLICOLOR_FORCE", "1")
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let color = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "terminal color")
+        .expect("color check present");
+    assert_eq!(color["ok"], true);
+    assert!(color["detail"].as_str().unwrap().contains("CLICOLOR_FORCE"));
+    // Forced color still never leaks ANSI into --json output.
+    let rendered = serde_json::to_string(&body).unwrap();
+    assert!(!rendered.contains('\u{1b}'));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn doctor_reports_disabled_color_when_no_color_flag() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let body: Value = serde_json::from_slice(
+        &base(&server, &dir)
+            .args(["doctor", "--json", "--no-color"])
+            .env("TERM", "xterm-256color")
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let color = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "terminal color")
+        .expect("color check present");
+    assert_eq!(color["ok"], false);
+    assert_eq!(color["critical"], false);
+    let detail = color["detail"].as_str().unwrap();
+    assert!(detail.contains("--no-color"), "{detail}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn doctor_terminal_checks_are_informational_only() {
+    // A dumb terminal must not fail doctor: it is a working, plain-text setup.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let body: Value = serde_json::from_slice(
+        &base(&server, &dir)
+            .args(["doctor", "--json"])
+            .env("TERM", "dumb")
+            .env_remove("LANG")
+            .env_remove("LC_ALL")
+            .env_remove("LC_CTYPE")
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(body["ok"], true, "terminal checks never fail doctor");
+    let checks = body["checks"].as_array().unwrap();
+    let color = checks
+        .iter()
+        .find(|c| c["name"] == "terminal color")
+        .expect("color check present");
+    assert_eq!(color["ok"], false);
+    assert_eq!(color["critical"], false);
+    // Piped stdout wins before TERM is even consulted here; assert the
+    // informational (non-critical) outcome rather than a specific reason.
+    let emoji = checks
+        .iter()
+        .find(|c| c["name"] == "terminal emoji")
+        .expect("emoji check present");
+    assert_eq!(emoji["critical"], false);
+    assert_eq!(emoji["ok"], false);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn doctor_human_output_shows_samples_without_ansi_when_piped() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    // Piped stdout (the default under assert_cmd) must stay ANSI-free and
+    // still show the emoji sample line for visual confirmation.
+    let output = base(&server, &dir)
+        .env("TERM", "xterm-256color")
+        .env("LANG", "en_US.UTF-8")
+        .args(["doctor"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(stdout.contains("terminal color"), "{stdout}");
+    assert!(stdout.contains("terminal emoji"), "{stdout}");
+    assert!(stdout.contains("emoji sample"), "{stdout}");
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "piped output must not emit ANSI: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn doctor_color_probe_respects_no_color_env() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let body: Value = serde_json::from_slice(
+        &base(&server, &dir)
+            .args(["doctor", "--json"])
+            .env("TERM", "xterm-256color")
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let color = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "terminal color")
+        .expect("color check present");
+    assert_eq!(color["ok"], false);
+    assert!(
+        color["detail"]
+            .as_str()
+            .unwrap()
+            .contains("NO_COLOR is set")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn doctor_fails_without_credentials() {
     let server = MockServer::start().await;
     let dir = TempDir::new().unwrap();
@@ -816,4 +1019,620 @@ async fn project_use_persists_validated_key() {
 
     // Validation hit the API (one request) before persistence was attempted.
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+// ---- New API surface: sprints, labels, attachments, comment deletion -----
+
+fn sprint_json(state: &str, revision: i64) -> Value {
+    json!({
+        "id": "11111111-1111-1111-1111-111111111111", "name": "Sprint 1", "state": state,
+        "startDate": null, "endDate": null, "goal": null, "targetPoints": null,
+        "createdAt": "2026-08-01T00:00:00Z", "updatedAt": "2026-09-01T00:00:00Z", "revision": revision
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sprint_list_renders_table_and_json() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/sprints"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(page(json!([sprint_json("active", 1)]))),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["--org", "acme", "--project", "HAM", "sprint", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Sprint 1"))
+        .stdout(predicate::str::contains("active"));
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "sprint",
+            "list",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["items"][0]["state"], "active");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sprint_create_sends_name_and_idempotency_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/sprints"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(sprint_json("future", 1)))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "sprint",
+            "create",
+            "--name",
+            "Sprint 1",
+            "--idempotency-key",
+            "sprint-2026-01",
+        ])
+        .assert()
+        .success();
+
+    let req = &server.received_requests().await.unwrap()[0];
+    assert_eq!(
+        req.headers
+            .get("idempotency-key")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "sprint-2026-01"
+    );
+    let body: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body["name"], "Sprint 1");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sprint_transition_sends_if_match_and_completion() {
+    let sprint_id = "11111111-1111-1111-1111-111111111111";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"sprint-1\"")
+                .set_body_json(sprint_json("active", 1)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}/transitions"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "currentState": "active",
+            "transitions": [{"targetState": "done", "requiresCompletionAction": true}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}/transitions"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"sprint-2\"")
+                .set_body_json(sprint_json("done", 2)),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "sprint",
+            "transition",
+            sprint_id,
+            "done",
+            "--move-to-backlog",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let req = &server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.method.as_str() == "POST")
+        .unwrap();
+    assert_eq!(
+        req.headers.get("if-match").unwrap().to_str().unwrap(),
+        "\"sprint-1\""
+    );
+    let body: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body["targetState"], "done");
+    assert_eq!(body["completionAction"]["mode"], "backlog");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sprint_transition_rejects_disallowed_target() {
+    let sprint_id = "11111111-1111-1111-1111-111111111111";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"sprint-1\"")
+                .set_body_json(sprint_json("done", 1)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}/transitions"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "currentState": "done", "transitions": []
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "sprint",
+            "transition",
+            sprint_id,
+            "active",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("not allowed from done"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn label_list_and_create_flow() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([
+            {"id": "l1", "name": "api", "color": "#6366f1", "createdAt": "2026-01-01T00:00:00Z"}
+        ]))))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/labels"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!(
+            {"id": "l2", "name": "cli", "color": "#6366f1", "createdAt": "2026-01-01T00:00:00Z"}
+        )))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "label",
+            "list",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "label",
+            "create",
+            "--name",
+            "cli",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let req = &server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.method.as_str() == "POST")
+        .unwrap();
+    let body: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body["name"], "cli");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_label_add_sends_if_match_and_label_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-4\"")
+                .set_body_json(work_item_json("todo", 4)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/labels",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-5\"")
+                .set_body_json(work_item_json("todo", 5)),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "label",
+            "add",
+            "HAM-1",
+            "--label",
+            "l1",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let req = &server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.method.as_str() == "POST")
+        .unwrap();
+    assert_eq!(
+        req.headers.get("if-match").unwrap().to_str().unwrap(),
+        "\"wi-4\""
+    );
+    let body: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body["labelId"], "l1");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_attachment_upload_download_delete() {
+    let dir = TempDir::new().unwrap();
+    let upload_path = dir.path().join("design.png");
+    std::fs::write(&upload_path, b"PNGDATA").unwrap();
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/attachments",
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": "a1", "workItemId": "w1", "fileName": "design.png", "contentType": "application/octet-stream",
+            "size": 7, "createdBy": {"id": "u", "name": "U"}, "createdAt": "2026-01-01T00:00:00Z"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/attachments/a1",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header(
+                    "Content-Disposition",
+                    "attachment; filename*=UTF-8''design.png",
+                )
+                .insert_header("Content-Type", "application/octet-stream")
+                .set_body_bytes(b"PNGDATA".to_vec()),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/attachments/a1",
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    // Upload
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "attachment",
+            "upload",
+            "HAM-1",
+            upload_path.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success();
+    let upload_req = &server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.method.as_str() == "POST")
+        .unwrap();
+    let content_type = upload_req
+        .headers
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        content_type.starts_with("multipart/form-data"),
+        "{content_type}"
+    );
+    let upload_body = String::from_utf8_lossy(&upload_req.body).to_string();
+    assert!(
+        upload_body.contains("filename=\"design.png\""),
+        "{upload_body}"
+    );
+    assert!(upload_body.contains("PNGDATA"), "{upload_body}");
+
+    // Download
+    let output_path = dir.path().join("downloaded.png");
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "attachment",
+            "download",
+            "HAM-1",
+            "a1",
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"PNGDATA");
+
+    // Delete
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "attachment",
+            "delete",
+            "HAM-1",
+            "a1",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"deleted\": true"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_comment_delete_maps_conflict_to_exit_six() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/comments/c1",
+        ))
+        .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+            "error": {"code": "CONFLICT", "message": "The Comment has replies."},
+            "requestId": "r"
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "comment",
+            "delete",
+            "HAM-1",
+            "c1",
+        ])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("The Comment has replies."));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_comment_delete_success_is_quiet_json() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/comments/c1",
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "comment",
+            "delete",
+            "HAM-1",
+            "c1",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"deleted\": true"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_create_requires_name_and_sends_idempotency() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(project_json("WEB")))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    // Missing name without a TTY fails deterministically (SPEC §30).
+    base(&server, &dir)
+        .args(["--org", "acme", "project", "create"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--name"));
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org", "acme", "project", "create", "--name", "Website", "--key", "WEB", "--json",
+        ])
+        .assert()
+        .success();
+
+    let req = &server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.method.as_str() == "POST")
+        .unwrap();
+    let body: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body["name"], "Website");
+    assert_eq!(body["key"], "WEB");
+    assert!(req.headers.contains_key("idempotency-key"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sprint_error_codes_map_to_exit_six() {
+    let sprint_id = "11111111-1111-1111-1111-111111111111";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"sprint-1\"")
+                .set_body_json(sprint_json("active", 1)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}/transitions"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "currentState": "active",
+            "transitions": [{"targetState": "done", "requiresCompletionAction": true}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}/transitions"
+        )))
+        .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+            "error": {"code": "SPRINT_HAS_UNFINISHED_WORK_ITEMS",
+                      "message": "This Sprint has unfinished Work Items; provide completionAction."},
+            "requestId": "r"
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "sprint",
+            "transition",
+            sprint_id,
+            "done",
+            "--move-to-backlog",
+        ])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("unfinished Work Items"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_status_json_reports_public_id_and_memberships() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "u1", "publicId": "usr_cPbfeqnghA-RLpDVOMQhHg", "name": "Steven",
+            "email": "steven@example.com",
+            "authentication": {"type": "pat", "credentialId": "c", "credentialName": "n", "scopes": [], "expiresAt": "2027-01-01T00:00:00Z"},
+            "defaultOrganization": null,
+            "organizations": [{"id": "o1", "slug": "acme", "name": "Acme", "username": "steven"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args(["auth", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["user"]["publicId"], "usr_cPbfeqnghA-RLpDVOMQhHg");
+    assert_eq!(body["user"]["organizations"][0]["username"], "steven");
 }

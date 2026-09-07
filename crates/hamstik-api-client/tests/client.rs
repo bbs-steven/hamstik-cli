@@ -387,6 +387,21 @@ fn work_item_json() -> serde_json::Value {
     })
 }
 
+fn sprint_json(state: &str, revision: i64) -> serde_json::Value {
+    json!({
+        "id":"11111111-1111-1111-1111-111111111111","name":"Sprint 1","state":state,
+        "startDate":null,"endDate":null,"goal":null,"targetPoints":null,
+        "createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z","revision":revision
+    })
+}
+
+fn attachment_json() -> serde_json::Value {
+    json!({
+        "id":"a1","workItemId":"w1","fileName":"design.png","contentType":"image/png",
+        "size":11,"createdBy":{"id":"u","name":"U"},"createdAt":"2026-01-01T00:00:00Z"
+    })
+}
+
 // ---- Hardening behaviors ---------------------------------------------------
 
 /// A redirect response must surface as its own error and never be followed:
@@ -479,4 +494,403 @@ async fn follow_all_terminates_on_an_endless_server() {
     })
     .await;
     assert!(result.is_err(), "endless pagination must fail");
+}
+
+// ---- New surface: projects, sprints, labels, comments, attachments -------
+
+#[tokio::test]
+async fn creates_project_with_idempotency_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id":"p1","organizationId":"o1","key":"WEB","name":"Website",
+            "description":null,"color":"#3b82f6",
+            "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let resp = client
+        .create_project(
+            "acme",
+            &hamstik_api_client::CreateProjectRequest {
+                name: "Website".into(),
+                key: Some("WEB".into()),
+                description: None,
+                color: Some("#3b82f6".into()),
+            },
+            "project-key-01",
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.value.key, "WEB");
+
+    let req = &server.received_requests().await.unwrap()[0];
+    assert_eq!(
+        req.headers
+            .get("idempotency-key")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "project-key-01"
+    );
+    let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body["name"], "Website");
+    assert_eq!(body["key"], "WEB");
+}
+
+#[tokio::test]
+async fn sprint_lifecycle_sends_if_match_and_completion_action() {
+    let server = MockServer::start().await;
+    let sprint_id = "11111111-1111-1111-1111-111111111111";
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"sprint-1\"")
+                .set_body_json(sprint_json("active", 1)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}/transitions"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "currentState":"active",
+            "transitions":[{"targetState":"done","requiresCompletionAction":true}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/api/v1/organizations/acme/projects/HAM/sprints/{sprint_id}/transitions"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"sprint-2\"")
+                .set_body_json(sprint_json("done", 2)),
+        )
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let current = client.get_sprint("acme", "HAM", sprint_id).await.unwrap();
+    assert_eq!(current.etag.as_deref(), Some("\"sprint-1\""));
+
+    let resp = client
+        .transition_sprint(
+            "acme",
+            "HAM",
+            sprint_id,
+            &hamstik_api_client::TransitionSprintRequest {
+                target_state: "done".to_string(),
+                completion_action: Some(hamstik_api_client::CompletionAction::Backlog),
+            },
+            "\"sprint-1\"",
+            "sprint-key-01",
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.value.state, "done");
+
+    let req = &server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.method.as_str() == "POST")
+        .unwrap();
+    assert_eq!(
+        req.headers.get("if-match").unwrap().to_str().unwrap(),
+        "\"sprint-1\""
+    );
+    let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body["targetState"], "done");
+    assert_eq!(body["completionAction"]["mode"], "backlog");
+}
+
+#[tokio::test]
+async fn labels_list_create_and_attach_detach() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items":[{"id":"l1","name":"api","color":"#6366f1","createdAt":"2026-01-01T00:00:00Z"}],
+            "page":{"limit":50,"hasMore":false,"nextCursor":null}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/labels"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!(
+            {"id":"l2","name":"cli","color":"#6366f1","createdAt":"2026-01-01T00:00:00Z"}
+        )))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/labels",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-5\"")
+                .set_body_json(work_item_json()),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/labels/l1",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("ETag", "\"wi-6\"")
+                .set_body_json(work_item_json()),
+        )
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let listed = client
+        .list_labels("acme", "HAM", ListOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(listed.value.items[0].name, "api");
+
+    client
+        .create_label(
+            "acme",
+            "HAM",
+            &hamstik_api_client::CreateLabelRequest {
+                name: "cli".into(),
+                color: None,
+            },
+            "label-key-01",
+        )
+        .await
+        .unwrap();
+
+    let attached = client
+        .attach_label("acme", "HAM", "HAM-1", "l1", "\"wi-4\"", "attach-key-01")
+        .await
+        .unwrap();
+    assert_eq!(attached.etag.as_deref(), Some("\"wi-5\""));
+
+    let detached = client
+        .detach_label("acme", "HAM", "HAM-1", "l1", "\"wi-5\"", "detach-key-01")
+        .await
+        .unwrap();
+    assert!(detached.value.key == "HAM-1");
+
+    let reqs = server.received_requests().await.unwrap();
+    let label_post = reqs
+        .iter()
+        .find(|r| r.url.path().ends_with("/labels") && r.method.as_str() == "POST")
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&label_post.body).unwrap();
+    assert_eq!(body["name"], "cli");
+    // Attachments of labels use If-Match and idempotency keys.
+    let attach = reqs
+        .iter()
+        .find(|r| r.url.path().ends_with("/work-items/HAM-1/labels"))
+        .unwrap();
+    assert_eq!(
+        attach.headers.get("if-match").unwrap().to_str().unwrap(),
+        "\"wi-4\""
+    );
+}
+
+#[tokio::test]
+async fn deletes_comment_returns_void() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/comments/c1",
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    client
+        .delete_comment("acme", "HAM", "HAM-1", "c1")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn comment_delete_maps_conflict() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/comments/c1",
+        ))
+        .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+            "error":{"code":"CONFLICT","message":"The Comment has replies."},"requestId":"r"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let err = client
+        .delete_comment("acme", "HAM", "HAM-1", "c1")
+        .await
+        .unwrap_err();
+    assert_eq!(err.as_api().unwrap().code, "CONFLICT");
+}
+
+#[tokio::test]
+async fn uploads_attachment_as_multipart_with_idempotency() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/attachments",
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(attachment_json()))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let resp = client
+        .upload_attachment(
+            "acme",
+            "HAM",
+            "HAM-1",
+            &hamstik_api_client::client::MultipartFile {
+                file_name: "design.png".to_string(),
+                content_type: Some("image/png".to_string()),
+                bytes: vec![1, 2, 3, 4],
+            },
+            "attach-key-01",
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.value.file_name, "design.png");
+
+    let req = &server.received_requests().await.unwrap()[0];
+    let content_type = req.headers.get("content-type").unwrap().to_str().unwrap();
+    assert!(
+        content_type.starts_with("multipart/form-data"),
+        "{content_type}"
+    );
+    assert_eq!(
+        req.headers
+            .get("idempotency-key")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "attach-key-01"
+    );
+    let body = String::from_utf8_lossy(&req.body);
+    assert!(body.contains("filename=\"design.png\""), "{body}");
+    assert!(body.contains("form-data; name=\"file\""), "{body}");
+}
+
+#[tokio::test]
+async fn downloads_attachment_bytes_and_file_name() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/attachments/a1",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header(
+                    "Content-Disposition",
+                    "attachment; filename*=UTF-8''design%20one.png",
+                )
+                .insert_header("Content-Type", "image/png")
+                .insert_header("X-Request-Id", "req-dl")
+                .set_body_bytes(vec![1, 2, 3, 4]),
+        )
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let download = client
+        .download_attachment("acme", "HAM", "HAM-1", "a1")
+        .await
+        .unwrap();
+    assert_eq!(download.bytes, vec![1, 2, 3, 4]);
+    assert_eq!(download.file_name.as_deref(), Some("design one.png"));
+    assert_eq!(download.content_type.as_deref(), Some("image/png"));
+    assert_eq!(download.request_id.as_deref(), Some("req-dl"));
+}
+
+#[tokio::test]
+async fn deletes_attachment_returns_void() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/attachments/a1",
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    client
+        .delete_attachment("acme", "HAM", "HAM-1", "a1")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn sprint_create_sends_payload() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/sprints"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(sprint_json("future", 1)))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let resp = client
+        .create_sprint(
+            "acme",
+            "HAM",
+            &hamstik_api_client::CreateSprintRequest {
+                name: "Sprint 1".into(),
+                start_date: Some(Some("2026-09-01T00:00:00Z".into())),
+                ..Default::default()
+            },
+            "sprint-create-1",
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.value.state, "future");
+
+    let body: serde_json::Value =
+        serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
+    assert_eq!(body["name"], "Sprint 1");
+    assert_eq!(body["startDate"], "2026-09-01T00:00:00Z");
+    assert!(body.get("targetPoints").is_none());
+}
+
+#[tokio::test]
+async fn me_exposes_public_id_and_memberships() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":"u1","publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"N","email":"n@x",
+            "authentication":{"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
+            "defaultOrganization":null,
+            "organizations":[{"id":"o1","slug":"acme","name":"Acme","username":"n"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let me = client.whoami().await.unwrap();
+    assert_eq!(
+        me.value.public_id.as_deref(),
+        Some("usr_cPbfeqnghA-RLpDVOMQhHg")
+    );
+    assert_eq!(me.value.organizations[0].username.as_deref(), Some("n"));
 }
