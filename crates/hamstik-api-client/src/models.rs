@@ -605,6 +605,32 @@ pub struct WorkItemContextList {
     pub page: Page,
 }
 
+/// A profile Work Item collection row.
+///
+/// The profile Work projection extends the context summary with the item's
+/// reporter. The reporter is present only in the complete projection; a
+/// sparse `fields=` selection omits it because `reporter` is not a Work Item
+/// summary field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileWorkItemSummary {
+    /// The context summary fields.
+    #[serde(flatten)]
+    pub summary: WorkItemContextSummary,
+    /// The reporter, when recorded.
+    #[serde(default)]
+    pub reporter: Option<UserSummary>,
+}
+
+/// A profile Work Item page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileWorkItemList {
+    /// One page of profile Work summaries.
+    pub items: Vec<ProfileWorkItemSummary>,
+    /// Pagination metadata.
+    pub page: Page,
+}
+
 /// The parent reference on a full work item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -432,11 +432,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Profile Work Item page.",
+            "description": "Profile Work Item page. Each item includes a public assignee summary when present and a public reporter summary in the complete projection; sparse fields omit reporter because it is not a Work Item summary field.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkItemContextList"
+                  "$ref": "#/components/schemas/ProfileWorkItemList"
                 }
               }
             },
@@ -7327,6 +7327,87 @@
                     },
                     "organization": {
                       "$ref": "#/components/schemas/OrganizationSummary"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "ProfileWorkItemList": {
+        "type": "object",
+        "description": "A profile Work Item page. Each item includes project and Organization context; the complete projection also includes a public reporter summary. Sparse fields omit reporter because it is not a Work Item summary field. Id, key, revision, project, and organization are always present.",
+        "required": [
+          "items",
+          "page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/PublicWorkItemSummary"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "project",
+                    "organization"
+                  ],
+                  "properties": {
+                    "project": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "key",
+                        "name",
+                        "color"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "key": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "color": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "organization": {
+                      "$ref": "#/components/schemas/OrganizationSummary"
+                    },
+                    "reporter": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "publicId",
+                            "name"
+                          ],
+                          "properties": {
+                            "publicId": {
+                              "$ref": "#/components/schemas/PublicUserId"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   }
                 }

@@ -968,6 +968,38 @@ async fn lists_my_work_with_context() {
 }
 
 #[tokio::test]
+async fn lists_profile_work_with_reporter() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users/usr_cPbfeqnghA-RLpDVOMQhHg/work"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items":[{
+                "id":"1","key":"HAM-1","revision":2,"title":"T","status":"todo",
+                "assignee":{"publicId":"usr_cPbfeqnghA-RLpDVOMQhHg","name":"A"},
+                "reporter":{"publicId":"usr_OtherUserPublicIdAAAAQ","name":"R"},
+                "project":{"id":"p","key":"HAM","name":"Ham","color":"#000000"},
+                "organization":{"id":"o","slug":"acme","name":"Acme"}
+            }],
+            "page":{"limit":50,"hasMore":false,"nextCursor":null}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let resp = client
+        .list_user_profile_work(
+            "usr_cPbfeqnghA-RLpDVOMQhHg",
+            hamstik_api_client::ListWorkItemsQuery::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.value.items[0].summary.project.key, "HAM");
+    let reporter = resp.value.items[0].reporter.as_ref().unwrap();
+    assert_eq!(reporter.public_id(), Some("usr_OtherUserPublicIdAAAAQ"));
+    assert_eq!(reporter.name(), "R");
+}
+
+#[tokio::test]
 async fn reads_user_profile() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

@@ -157,7 +157,7 @@ async fn work(
     emit_table(
         session,
         &json_value,
-        &["KEY", "PROJECT", "TITLE", "STATUS", "ASSIGNEE"],
+        &["KEY", "PROJECT", "TITLE", "STATUS", "ASSIGNEE", "REPORTER"],
         &rows,
     )
 }
@@ -168,6 +168,13 @@ fn work_row_from_raw(raw: &Value) -> Vec<String> {
         .and_then(|p| p.get("key"))
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let user_name = |value: Option<&Value>| -> String {
+        value
+            .and_then(|a| a.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string()
+    };
     vec![
         raw.get("key")
             .and_then(Value::as_str)
@@ -182,12 +189,8 @@ fn work_row_from_raw(raw: &Value) -> Vec<String> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
-        raw.get("assignee")
-            .filter(|a| !a.is_null())
-            .and_then(|a| a.get("name"))
-            .and_then(Value::as_str)
-            .unwrap_or("-")
-            .to_string(),
+        user_name(raw.get("assignee").filter(|a| !a.is_null())),
+        user_name(raw.get("reporter").filter(|r| !r.is_null())),
     ]
 }
 

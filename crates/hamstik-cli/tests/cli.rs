@@ -2448,12 +2448,22 @@ async fn user_work_lists_context_items() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/users/usr_cPbfeqnghA-RLpDVOMQhHg/work"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([]))))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([{
+            "id": "wi-1",
+            "key": "HAM-7",
+            "revision": 1,
+            "title": "Profile work row",
+            "status": "todo",
+            "assignee": {"publicId": "usr_cPbfeqnghA-RLpDVOMQhHg", "name": "Assignee"},
+            "reporter": {"publicId": "usr_OtherUserPublicIdAAAAQ", "name": "Reporter"},
+            "project": {"id": "p1", "key": "HAM", "name": "Ham", "color": "#000000"},
+            "organization": {"id": "o1", "slug": "acme", "name": "Acme"}
+        }]))))
         .mount(&server)
         .await;
 
     let dir = TempDir::new().unwrap();
-    base(&server, &dir)
+    let output = base(&server, &dir)
         .args([
             "user",
             "work",
@@ -2464,6 +2474,9 @@ async fn user_work_lists_context_items() {
         ])
         .assert()
         .success();
+
+    let body: Value = serde_json::from_slice(output.get_output().stdout.as_slice()).unwrap();
+    assert_eq!(body["items"][0]["reporter"]["name"], "Reporter");
 
     let query = server.received_requests().await.unwrap()[0]
         .url

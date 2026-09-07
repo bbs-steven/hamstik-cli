@@ -1009,7 +1009,7 @@ pub trait HamstikApi: Send + Sync {
         &self,
         public_id: &str,
         query: ListWorkItemsQuery,
-    ) -> Result<ApiResponse<WorkItemContextList>, ClientError>;
+    ) -> Result<ApiResponse<ProfileWorkItemList>, ClientError>;
     /// `GET /users/{publicId}/activity`: meaningful activity by the user.
     async fn list_user_profile_activity(
         &self,
@@ -1959,7 +1959,7 @@ impl HamstikApi for HamstikClient {
         &self,
         public_id: &str,
         query: ListWorkItemsQuery,
-    ) -> Result<ApiResponse<WorkItemContextList>, ClientError> {
+    ) -> Result<ApiResponse<ProfileWorkItemList>, ClientError> {
         self.send_json(RequestSpec {
             method: Method::GET,
             segments: vec![

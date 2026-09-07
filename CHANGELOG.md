@@ -104,6 +104,12 @@ API v1 (29 → 51 operations; all changes additive):
 
 ### Changed (API sync)
 
+- `user work` decodes the dedicated profile Work projection
+  (`ProfileWorkItemList`) and gained a `REPORTER` table column; the
+  reporter is rendered from the complete projection and shows `-` when
+  absent or when a sparse fieldset omits it.
+- Refreshed the frozen OpenAPI snapshot (`openapi/hamstik-v1.json`) for
+  the profile Work projection change.
 - Work Item list summaries are sparse-tolerant: only `id`, `key`, and
   `revision` are guaranteed when `fields=` is set; table rendering falls
   back per column.
