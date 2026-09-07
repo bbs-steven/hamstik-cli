@@ -242,18 +242,43 @@ pub fn discover(start: &Path) -> Option<PathBuf> {
 }
 
 /// Loads and validates a context file.
+///
+/// Failures always name the file: `.hamstik.toml` is discovered by walking up
+/// from the working directory, so the user cannot guess which one broke.
 pub fn load(path: &Path) -> Result<ContextFile, CliError> {
-    let metadata = fs::metadata(path)
-        .map_err(|err| CliError::config(format!("cannot read context: {err}")))?;
+    let metadata =
+        fs::metadata(path).map_err(|err| fail(path, &format!("cannot read file ({err})")))?;
     if metadata.len() > MAX_CONTEXT_BYTES {
-        return Err(CliError::config(
-            "context file is too large (exceeds 64 KiB)",
+        return Err(fail(path, "file is too large (exceeds the 64 KiB limit)"));
+    }
+    let contents =
+        fs::read_to_string(path).map_err(|err| fail(path, &format!("cannot read file ({err})")))?;
+    let context: ContextFile = toml::from_str(&contents).map_err(|err| {
+        fail(
+            path,
+            &format!(
+                "invalid context file (repair the file, or upgrade this CLI if it was written \
+                 by a newer version): {err}"
+            ),
+        )
+    })?;
+    if context.version != CONTEXT_VERSION {
+        return Err(fail(
+            path,
+            &format!(
+                "schema version {} is not supported (this CLI uses version {CONTEXT_VERSION})",
+                context.version
+            ),
         ));
     }
-    let contents = fs::read_to_string(path)
-        .map_err(|err| CliError::config(format!("cannot read context: {err}")))?;
-    toml::from_str(&contents)
-        .map_err(|err| CliError::config(format!("invalid context file: {err}")))
+    Ok(context)
+}
+
+fn fail(path: &Path, reason: &str) -> CliError {
+    CliError::config(format!(
+        "{}: {reason}\nhint: repair or remove this file to recover; it holds only non-secret working context",
+        path.display()
+    ))
 }
 
 /// Writes a context file to disk.

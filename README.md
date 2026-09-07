@@ -104,7 +104,7 @@ The Dogfooding Alpha is implemented. Today the CLI provides:
 - a native Rust workspace that builds the `hamstik` executable;
 - a typed client for the Hamstik Public API v1 (`/api/v1`) with pagination,
   retries, and idempotency-key support;
-- authentication and profiles — `hamstik auth login|status|list|switch|logout`,
+- authentication and profiles — `hamstik auth login|status|list|switch|logout|forget`,
   with secrets held only in the OS credential store;
 - working context — `hamstik context show|set|clear|init` backed by a
   project-local `.hamstik.toml` plus global profile defaults;
@@ -143,6 +143,28 @@ no PAT-revocation endpoint yet). Profile metadata is intentionally kept, so
 `hamstik auth list` still shows the profile after logout and `auth status`
 reports `no stored credential` until you log in again. Logging out twice is
 idempotent and reports `already logged out`.
+
+To remove a profile entirely — credential *and* its `config.toml` entry — use
+`hamstik auth forget [PROFILE]` (the selected profile when no name is given).
+This is still local only: the PAT remains valid server-side, so revoke it in the
+Hamstik web UI if that matters. If the profile being forgotten was active, the
+slot is refilled only when exactly one profile remains; otherwise no profile is
+active until `auth login` or `auth switch` picks one, because guessing would
+silently change which host your commands talk to. If the credential store is
+unreachable, the profile entry is still removed and the exact account key is
+printed so the orphaned secret can be deleted by hand.
+
+### When the configuration file is broken
+
+A missing `config.toml` is normal and treated as an empty configuration. A file
+that exists but cannot be understood (malformed TOML, an unknown field, an
+unsupported schema version, unreadable permissions) is always an error, never
+silently ignored — that would discard profiles and context defaults. The failure
+names the offending file, points at a repair or removal hint, and exits with the
+configuration exit code (10). `hamstik doctor` reports the same problem as a
+`FAIL` line instead of refusing to run, so the rest of the diagnostics —
+including the credential store check, which does not depend on config — stay
+available. The same applies to a broken project-local `.hamstik.toml`.
 
 ## Build from source
 

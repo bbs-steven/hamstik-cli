@@ -450,3 +450,166 @@ fn unrecognized_subcommand_has_no_banner() {
         .stdout(predicate::str::contains(BANNER_ART).not())
         .stderr(predicate::str::contains("unrecognized subcommand"));
 }
+
+// ---- Profile removal and broken config files ------------------------------
+
+/// A `hamstik` command with an isolated config and no host/token/profile, for
+/// commands that work purely on config state.
+fn config_command(dir: &TempDir) -> Command {
+    let mut cmd = Command::cargo_bin("hamstik").expect("hamstik binary");
+    cmd.env("HAMSTIK_CONFIG", dir.path().join("config.toml"));
+    for var in [
+        "HAMSTIK_HOST",
+        "HAMSTIK_TOKEN",
+        "HAMSTIK_PROFILE",
+        "HAMSTIK_ORG",
+        "HAMSTIK_PROJECT",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd.current_dir(dir.path());
+    cmd
+}
+
+const TWO_PROFILES: &str = r#"version = 1
+active_profile = "one"
+
+[profiles.one]
+host = "https://one.test"
+user_id = "u1"
+email = "one@example.com"
+
+[profiles.two]
+host = "https://two.test"
+user_id = "u2"
+email = "two@example.com"
+"#;
+
+#[test]
+fn auth_forget_removes_the_profile_and_repairs_the_active_one() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("config.toml"), TWO_PROFILES).unwrap();
+
+    let output = config_command(&dir)
+        .args(["auth", "forget", "one", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["forget"], true);
+    assert_eq!(body["profile"], "one");
+    assert_eq!(body["host"], "https://one.test");
+    // Local-only: a PAT is never revoked by the CLI.
+    assert_eq!(body["revoked"], false);
+    // `two` is the only profile left, so it becomes active.
+    assert_eq!(body["activeProfile"], "two");
+
+    let written = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+    assert!(!written.contains("one.test"), "{written}");
+    assert!(written.contains("two.test"), "{written}");
+    assert!(written.contains(r#"active_profile = "two""#), "{written}");
+}
+
+#[test]
+fn auth_forget_the_last_profile_leaves_no_active_profile() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("config.toml"),
+        r#"version = 1
+active_profile = "one"
+
+[profiles.one]
+host = "https://one.test"
+user_id = "u1"
+email = "one@example.com"
+"#,
+    )
+    .unwrap();
+
+    let output = config_command(&dir)
+        .args(["auth", "forget", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    // No profile named: the active one is the target.
+    assert_eq!(body["profile"], "one");
+    assert_eq!(body["activeProfile"], Value::Null);
+    let written = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+    assert!(!written.contains("one.test"), "{written}");
+}
+
+#[test]
+fn auth_forget_unknown_profile_lists_what_exists() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("config.toml"), TWO_PROFILES).unwrap();
+
+    config_command(&dir)
+        .args(["auth", "forget", "nope"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("no such profile"))
+        .stderr(predicate::str::contains("configured profiles: one, two"));
+}
+
+#[test]
+fn auth_forget_without_any_profile_is_a_usage_error() {
+    let dir = TempDir::new().unwrap();
+    config_command(&dir)
+        .args(["auth", "forget"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("no profile to forget"));
+}
+
+#[test]
+fn corrupt_config_names_the_file_and_exits_configuration() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "version = 1\n[[oops\n").unwrap();
+
+    let expected_path = path.display().to_string();
+    config_command(&dir)
+        .args(["auth", "list"])
+        .assert()
+        .code(10)
+        .stderr(predicate::str::contains("invalid configuration"))
+        .stderr(predicate::str::contains(expected_path))
+        .stderr(predicate::str::contains("hint:"));
+}
+
+#[test]
+fn doctor_reports_a_corrupt_config_instead_of_refusing_to_run() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "version = 1\n[[oops\n").unwrap();
+
+    let expected_path = path.display().to_string();
+    // `doctor` is the command people reach for when config is broken, so it must
+    // still run and report, not bail before printing anything.
+    config_command(&dir)
+        .args(["doctor"])
+        .assert()
+        .code(10)
+        .stdout(predicate::str::contains("[FAIL] configuration file"))
+        .stdout(predicate::str::contains(expected_path))
+        .stdout(predicate::str::contains("not ready."));
+}
+
+#[test]
+fn doctor_reports_a_corrupt_context_file_with_its_path() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join(".hamstik.toml");
+    std::fs::write(&path, "version = 1\nhost = 42\n").unwrap();
+
+    let expected_path = path.display().to_string();
+    config_command(&dir)
+        .args(["doctor", "--json"])
+        .assert()
+        .code(10)
+        .stdout(predicate::str::contains(expected_path));
+}

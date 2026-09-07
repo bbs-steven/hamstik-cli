@@ -121,6 +121,12 @@ pub enum AuthCommand {
     },
     /// Remove the local credential (does not revoke the server-side PAT).
     Logout,
+    /// Log out and forget a profile: remove its stored credential and its
+    /// config entry (does not revoke the server-side PAT).
+    Forget {
+        /// Profile to forget (defaults to the selected profile).
+        profile: Option<String>,
+    },
 }
 
 #[derive(Args, Debug)]

@@ -609,6 +609,16 @@ default_project = "HAM"
 
 No secret values are permitted.
 
+A missing config file is a normal state and behaves like an empty document. A
+file that exists but cannot be understood — malformed TOML, an unknown field, an
+unsupported `version`, or an unreadable path — must fail loudly with the
+effective configuration exit code, naming the file in the message; silently
+starting over would discard profiles and context defaults. Rejecting an unknown
+`version` is what makes drift from a newer CLI visible instead of corrosive.
+`hamstik doctor` reports the same failure as a failing check rather than aborting,
+so diagnostics that do not depend on config (notably the credential store) remain
+usable.
+
 ---
 
 # 24. Credential Store Keys
@@ -708,9 +718,17 @@ hamstik auth status
 hamstik auth list
 hamstik auth switch <profile>
 hamstik auth logout
+hamstik auth forget [profile]
 ```
 
 `auth logout` removes the local credential.
+
+`auth forget` additionally removes the profile entry from the global config, and
+is the only auth command that edits config state beyond `login`/`switch`. It
+targets the named profile, or the selected profile when no name is given. Like
+`auth logout` it never revokes the PAT server-side. Forgetting a profile that was
+active must not silently move the user to a different host: `active_profile` is
+reused only when exactly one profile remains, otherwise it is cleared.
 
 It does not necessarily revoke the PAT server-side unless a future public PAT-management API supports that action.
 

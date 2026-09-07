@@ -1,7 +1,7 @@
 // Copyright 2026 Blackboard Studios
 // SPDX-License-Identifier: Apache-2.0
 
-//! `hamstik auth` (login / status / list / switch / logout).
+//! `hamstik auth` (login / status / list / switch / logout / forget).
 
 use std::io::Read;
 
@@ -23,6 +23,7 @@ pub async fn run(session: &mut Session<'_>, args: &AuthArgs) -> Result<(), CliEr
         AuthCommand::List => list(session),
         AuthCommand::Switch { profile } => switch(session, profile),
         AuthCommand::Logout => logout(session),
+        AuthCommand::Forget { profile } => forget(session, profile.as_deref()),
     }
 }
 
@@ -229,7 +230,10 @@ fn switch(session: &mut Session<'_>, name: &str) -> Result<(), CliError> {
         // Report invalid names clearly; existing (possibly legacy) names are
         // always switchable, so validation only guards genuinely bad input.
         crate::config::validate_profile_name(name)?;
-        return Err(CliError::config(format!("no such profile: {name}")));
+        return Err(CliError::config(format!(
+            "no such profile: {name}{}",
+            configured_profiles_hint(&config)
+        )));
     }
     config.active_profile = Some(name.to_string());
     session.config.save(&config)?;
@@ -268,17 +272,7 @@ fn logout(session: &mut Session<'_>) -> Result<(), CliError> {
     let account = credentials::account_key(selection.host.as_str(), &profile.user_id);
     // Read first so a second logout says "already logged out" instead of
     // claiming a removal that never happened.
-    let had_credential = session
-        .store
-        .get(&account)
-        .map_err(|err| CliError::credential(format!("credential store unavailable: {err}")))?
-        .is_some();
-    if had_credential {
-        session
-            .store
-            .delete(&account)
-            .map_err(|err| CliError::credential(format!("cannot delete credential: {err}")))?;
-    }
+    let had_credential = remove_credential(session, &account)?;
 
     if session.json() {
         return emit_json(
@@ -318,4 +312,115 @@ fn logout(session: &mut Session<'_>) -> Result<(), CliError> {
             .map_err(CliError::general)?;
     }
     Ok(())
+}
+
+/// Logs out and forgets a profile: removes its stored credential and its entry
+/// in the config file.
+///
+/// Unlike `logout`, this addresses a profile by identity (the host recorded in
+/// the profile), so `--host` plays no part. An unreachable credential store
+/// must not leave the user stuck, so the profile entry is removed either way
+/// and the exact account key is reported for manual cleanup.
+fn forget(session: &mut Session<'_>, requested: Option<&str>) -> Result<(), CliError> {
+    let mut config = session.config.load()?;
+    let name = requested
+        .map(str::to_string)
+        .or_else(|| config.active_profile.clone())
+        .ok_or_else(|| {
+            CliError::usage(
+                "no profile to forget; name one (see `hamstik auth list`) or log in first",
+            )
+        })?;
+
+    let Some(profile) = config::forget_profile(&mut config, &name) else {
+        return Err(CliError::usage(format!(
+            "no such profile: {name}{}",
+            configured_profiles_hint(&config)
+        )));
+    };
+
+    let account = credentials::account_key(&profile.host, &profile.user_id);
+    let (credential_removed, store_problem) = match remove_credential(session, &account) {
+        Ok(removed) => (removed, None),
+        Err(err) => (false, Some(err.message)),
+    };
+
+    session.config.save(&config)?;
+
+    if let Some(problem) = &store_problem {
+        session.out.warn(&format!(
+            "the credential for {account:?} was NOT removed ({problem}); delete it from the OS store by hand"
+        ));
+    }
+
+    if session.json() {
+        let mut value = json!({
+            "forget": true,
+            "profile": name,
+            "host": profile.host,
+            "credentialRemoved": credential_removed,
+            // Local-only removal: the PAT itself stays valid server-side.
+            "revoked": false,
+            "activeProfile": config.active_profile,
+        });
+        if let Some(problem) = store_problem {
+            value["credentialError"] = json!(problem);
+        }
+        return emit_json(session, &value);
+    }
+
+    if !session.out.is_quiet() {
+        let credential_state = if store_problem.is_some() {
+            "removal failed (see above)"
+        } else if credential_removed {
+            "removed"
+        } else {
+            "was not stored"
+        };
+        session
+            .out
+            .line(&format!(
+                "Forgot profile {name:?} ({}) - credential {credential_state}",
+                profile.host
+            ))
+            .map_err(CliError::general)?;
+        let active_note = match &config.active_profile {
+            Some(active) => format!("  active profile is now {active:?}"),
+            None => {
+                "  no active profile; run `hamstik auth login` or `hamstik auth switch`".to_string()
+            }
+        };
+        session.out.line(&active_note).map_err(CliError::general)?;
+        session
+            .out
+            .line("  local only; the PAT is not revoked server-side")
+            .map_err(CliError::general)?;
+    }
+    Ok(())
+}
+
+/// Deletes `account`, reporting whether a credential was there to delete.
+fn remove_credential(session: &Session<'_>, account: &str) -> Result<bool, CliError> {
+    let existing = session
+        .store
+        .get(account)
+        .map_err(|err| CliError::credential(format!("credential store unavailable: {err}")))?;
+    if existing.is_none() {
+        return Ok(false);
+    }
+    session
+        .store
+        .delete(account)
+        .map_err(|err| CliError::credential(format!("cannot delete credential: {err}")))?;
+    Ok(true)
+}
+
+/// Lists the configured profiles for "no such profile" messages.
+fn configured_profiles_hint(config: &config::ConfigFile) -> String {
+    if config.profiles.is_empty() {
+        return "; no profiles are configured (run `hamstik auth login`)".to_string();
+    }
+    let mut names: Vec<&str> = config.profiles.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    format!("; configured profiles: {}", names.join(", "))
 }

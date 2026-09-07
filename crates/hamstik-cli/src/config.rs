@@ -73,50 +73,102 @@ impl ConfigStore {
     }
 
     /// Loads the config, returning an empty document when the file is absent.
+    ///
+    /// An absent file is a normal state, never an error. A file that exists but
+    /// cannot be understood IS an error: silently starting over would discard
+    /// profiles and context defaults. Every failure names the file and says how
+    /// to recover, because "invalid configuration" alone is not actionable.
     pub fn load(&self) -> Result<ConfigFile, CliError> {
         if !self.path.exists() {
             return Ok(ConfigFile::default());
         }
         let metadata = fs::metadata(self.path())
-            .map_err(|err| CliError::config(format!("cannot read config: {err}")))?;
+            .map_err(|err| self.fail(&format!("cannot read file ({err})")))?;
         if metadata.len() > MAX_CONFIG_BYTES {
-            return Err(CliError::config(
-                "configuration file is too large (exceeds 1 MiB limit)",
-            ));
+            return Err(self.fail("file is too large (exceeds the 1 MiB limit)"));
         }
         let contents = fs::read_to_string(self.path())
-            .map_err(|err| CliError::config(format!("cannot read config: {err}")))?;
-        toml::from_str(&contents)
-            .map_err(|err| CliError::config(format!("invalid configuration: {err}")))
+            .map_err(|err| self.fail(&format!("cannot read file ({err})")))?;
+        let config: ConfigFile = toml::from_str(&contents).map_err(|err| {
+            self.fail(&format!(
+                "invalid configuration (repair the file, or upgrade this CLI if it was \
+                 written by a newer version): {err}"
+            ))
+        })?;
+        self.check_version(&config)?;
+        Ok(config)
+    }
+
+    /// Rejects documents written for a different schema version.
+    fn check_version(&self, config: &ConfigFile) -> Result<(), CliError> {
+        match config.version.cmp(&CONFIG_VERSION) {
+            std::cmp::Ordering::Equal => Ok(()),
+            std::cmp::Ordering::Greater => Err(self.fail(&format!(
+                "schema version {} is newer than this CLI understands (version \
+                 {CONFIG_VERSION}); upgrade the Hamstik CLI",
+                config.version
+            ))),
+            std::cmp::Ordering::Less => Err(self.fail(&format!(
+                "schema version {} is no longer supported (this CLI writes version \
+                 {CONFIG_VERSION})",
+                config.version
+            ))),
+        }
+    }
+
+    /// Builds a config failure that names the file and offers a way out.
+    fn fail(&self, reason: &str) -> CliError {
+        CliError::config(format!(
+            "{}: {reason}\nhint: repair or remove this file to recover; it holds only non-secret \
+             profile metadata (tokens live in the OS credential store)",
+            self.path.display()
+        ))
     }
 
     /// Atomically writes the config, creating parent directories as needed.
     pub fn save(&self, config: &ConfigFile) -> Result<(), CliError> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                CliError::config(format!("cannot create config directory: {err}"))
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|err| self.fail(&format!("cannot create parent directory ({err})")))?;
         }
         let serialized = toml::to_string_pretty(config)
-            .map_err(|err| CliError::config(format!("cannot serialize config: {err}")))?;
+            .map_err(|err| self.fail(&format!("cannot serialize configuration ({err})")))?;
         let bytes = serialized.as_bytes();
         if bytes.len() as u64 > MAX_CONFIG_BYTES {
-            return Err(CliError::config("configuration file exceeds 1 MiB limit"));
+            return Err(self.fail("configuration would exceed the 1 MiB limit"));
         }
 
         let temp = self.path.with_extension("toml.tmp");
         {
             let mut file = fs::File::create(&temp)
-                .map_err(|err| CliError::config(format!("cannot write config: {err}")))?;
+                .map_err(|err| self.fail(&format!("cannot write temporary file ({err})")))?;
             file.write_all(bytes)
-                .map_err(|err| CliError::config(format!("cannot write config: {err}")))?;
+                .map_err(|err| self.fail(&format!("cannot write temporary file ({err})")))?;
             file.flush()
-                .map_err(|err| CliError::config(format!("cannot write config: {err}")))?;
+                .map_err(|err| self.fail(&format!("cannot write temporary file ({err})")))?;
         }
         fs::rename(&temp, self.path())
-            .map_err(|err| CliError::config(format!("cannot finalize config: {err}")))?;
+            .map_err(|err| self.fail(&format!("cannot replace file ({err})")))?;
         Ok(())
     }
+}
+
+/// Removes a profile from the document and repairs `active_profile`.
+///
+/// Forgetting the active profile must not silently move the user to a
+/// different host, so the slot is only refilled when exactly one profile
+/// remains (then there is no ambiguity).
+#[must_use]
+pub fn forget_profile(config: &mut ConfigFile, name: &str) -> Option<Profile> {
+    let removed = config.profiles.remove(name)?;
+    if config.active_profile.as_deref() == Some(name) {
+        config.active_profile = if config.profiles.len() == 1 {
+            config.profiles.keys().next().cloned()
+        } else {
+            None
+        };
+    }
+    Some(removed)
 }
 
 /// Validates a profile name against `^[A-Za-z0-9._-]{1,64}$`.
@@ -278,5 +330,113 @@ mod tests {
         validate_profile_name("hamstik.com-steven").unwrap();
         assert!(validate_profile_name("bad name").is_err());
         assert!(validate_profile_name("").is_err());
+    }
+
+    fn sample_profile(host: &str, user_id: &str) -> Profile {
+        Profile {
+            host: host.to_string(),
+            user_id: user_id.to_string(),
+            email: format!("{user_id}@example.com"),
+            default_organization: None,
+            default_project: None,
+        }
+    }
+
+    #[test]
+    fn corrupt_config_error_names_the_file_and_how_to_recover() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "version = 1\n[[broken\n").unwrap();
+
+        let err = ConfigStore::new(&path).load().unwrap_err();
+        // The user must be able to tell WHICH file broke and what to do next:
+        // HAMSTIK_CONFIG, XDG and the legacy path all exist.
+        assert_eq!(err.exit_code(), crate::exit::CONFIGURATION);
+        assert!(
+            err.message.contains(&path.display().to_string()),
+            "error must name the file: {}",
+            err.message
+        );
+        assert!(err.message.contains("invalid configuration"), "{err}");
+        assert!(err.message.contains("hint:"), "{err}");
+    }
+
+    #[test]
+    fn unreadable_config_file_reports_the_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::create_dir(&path).unwrap();
+
+        let err = ConfigStore::new(&path).load().unwrap_err();
+        assert_eq!(err.exit_code(), crate::exit::CONFIGURATION);
+        assert!(err.message.contains("cannot read file"), "{err}");
+        assert!(err.message.contains("hint:"), "{err}");
+    }
+
+    #[test]
+    fn newer_schema_version_asks_for_an_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, format!("version = {}\n", CONFIG_VERSION + 1)).unwrap();
+
+        let err = ConfigStore::new(&path).load().unwrap_err();
+        assert!(err.message.contains("newer than this CLI"), "{err}");
+        assert!(err.message.contains("upgrade"), "{err}");
+    }
+
+    #[test]
+    fn unsupported_schema_version_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "version = 0\n").unwrap();
+
+        let err = ConfigStore::new(&path).load().unwrap_err();
+        assert!(err.message.contains("no longer supported"), "{err}");
+    }
+
+    /// A config with the given active profile and one profile per name.
+    fn config_with(active: Option<&str>, names: &[&str]) -> ConfigFile {
+        let mut config = ConfigFile {
+            active_profile: active.map(str::to_string),
+            ..Default::default()
+        };
+        for name in names {
+            config
+                .profiles
+                .insert((*name).to_string(), sample_profile("https://x.test", name));
+        }
+        config
+    }
+
+    #[test]
+    fn forget_profile_removes_the_entry_and_keeps_an_unrelated_active_one() {
+        let mut config = config_with(Some("keep"), &["keep", "gone"]);
+
+        let removed = super::forget_profile(&mut config, "gone").expect("profile removed");
+        assert_eq!(removed.user_id, "gone");
+        assert!(!config.profiles.contains_key("gone"));
+        assert_eq!(config.active_profile.as_deref(), Some("keep"));
+    }
+
+    #[test]
+    fn forgetting_the_active_profile_refills_only_when_unambiguous() {
+        // Exactly one profile remains: it becomes active, nothing to guess.
+        let mut config = config_with(Some("a"), &["a", "b"]);
+        assert!(super::forget_profile(&mut config, "a").is_some());
+        assert_eq!(config.active_profile.as_deref(), Some("b"));
+
+        // Several remain: picking one would silently switch hosts, so none does.
+        let mut config = config_with(Some("a"), &["a", "b", "c"]);
+        assert!(super::forget_profile(&mut config, "a").is_some());
+        assert_eq!(config.active_profile, None);
+    }
+
+    #[test]
+    fn forgetting_an_unknown_profile_changes_nothing() {
+        let mut config = config_with(Some("a"), &["a"]);
+
+        assert!(super::forget_profile(&mut config, "nope").is_none());
+        assert_eq!(config.active_profile.as_deref(), Some("a"));
+        assert_eq!(config.profiles.len(), 1);
     }
 }

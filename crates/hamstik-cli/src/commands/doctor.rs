@@ -45,15 +45,33 @@ impl Check {
 
 pub async fn run(session: &mut Session<'_>) -> Result<(), CliError> {
     let mut checks: Vec<Check> = Vec::new();
+    let mut code = exit::SUCCESS;
 
+    // A config or context file that cannot be parsed must not abort the
+    // diagnostics: `doctor` is exactly the command people reach for then, and
+    // the credential store check below does not depend on config at all.
     let config_path = session.config.path();
-    checks.push(Check::info(
-        "configuration file",
-        config_path.exists(),
-        config_path.display().to_string(),
-    ));
+    let selection = match session.selection() {
+        Ok(selection) => {
+            checks.push(Check::info(
+                "configuration file",
+                config_path.exists(),
+                config_path.display().to_string(),
+            ));
+            selection
+        }
+        Err(err) => {
+            code = err.exit_code();
+            checks.push(Check::critical(
+                "configuration file",
+                false,
+                err.message.clone(),
+            ));
+            check_store(session, &mut checks, &mut code);
+            return render(session, checks, code);
+        }
+    };
 
-    let selection = session.selection()?;
     checks.push(Check::info(
         "host",
         true,
@@ -90,26 +108,7 @@ pub async fn run(session: &mut Session<'_>) -> Result<(), CliError> {
             .unwrap_or_else(|| "not set".to_string()),
     ));
 
-    // A keyring build without a persistent backend accepts writes that never
-    // survive the process, so report it before anything else can blame the
-    // token for it (SPEC §25, §26).
-    let mut code = exit::SUCCESS;
-    if session.env.var("HAMSTIK_TOKEN").is_none() {
-        if credentials::store_is_persistent() {
-            checks.push(Check::info(
-                "credential store",
-                true,
-                "persistent store available".to_string(),
-            ));
-        } else {
-            code = exit::CONFIGURATION;
-            checks.push(Check::critical(
-                "credential store",
-                false,
-                credentials::NO_STORE_HINT.to_string(),
-            ));
-        }
-    }
+    check_store(session, &mut checks, &mut code);
 
     match resolve_token(session, &selection, &mut checks) {
         Some(secret) => match session.build_client(selection.host.clone(), secret) {
@@ -140,6 +139,41 @@ pub async fn run(session: &mut Session<'_>) -> Result<(), CliError> {
         }
     }
 
+    render(session, checks, code)
+}
+
+/// Reports whether a persistent credential store is reachable.
+///
+/// A keyring build without a backend, or a locked/unavailable keyring service,
+/// accepts writes that never survive the process, so it is reported before
+/// anything else can blame the token for it (SPEC §25, §26).
+fn check_store(session: &Session<'_>, checks: &mut Vec<Check>, code: &mut i32) {
+    // With HAMSTIK_TOKEN set the store is never consulted, so its state cannot
+    // be responsible for what happened.
+    if session.env.var("HAMSTIK_TOKEN").is_some() {
+        return;
+    }
+    if credentials::store_is_persistent() {
+        checks.push(Check::info(
+            "credential store",
+            true,
+            "persistent store available".to_string(),
+        ));
+    } else {
+        *code = if *code == exit::SUCCESS {
+            exit::CONFIGURATION
+        } else {
+            *code
+        };
+        checks.push(Check::critical(
+            "credential store",
+            false,
+            credentials::NO_STORE_HINT.to_string(),
+        ));
+    }
+}
+
+fn render(session: &mut Session<'_>, checks: Vec<Check>, code: i32) -> Result<(), CliError> {
     let overall_ok = code == exit::SUCCESS;
 
     if session.json() {
