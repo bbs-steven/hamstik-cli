@@ -43,6 +43,7 @@ impl Check {
     }
 }
 
+/// Runs the connectivity/configuration diagnostics.
 pub async fn run(session: &mut Session<'_>) -> Result<(), CliError> {
     let mut checks: Vec<Check> = Vec::new();
     let mut code = exit::SUCCESS;
@@ -218,7 +219,17 @@ fn resolve_token(
     checks: &mut Vec<Check>,
 ) -> Option<SecretString> {
     if let Some(token) = session.env.var("HAMSTIK_TOKEN") {
-        return Some(SecretString::new(token.into()));
+        return match crate::input::token_to_secret(&token) {
+            Ok(secret) => Some(secret),
+            Err(message) => {
+                checks.push(Check::critical(
+                    "authentication",
+                    false,
+                    format!("HAMSTIK_TOKEN is unusable: {message}"),
+                ));
+                None
+            }
+        };
     }
     let profile = selection.profile_meta.as_ref()?;
     let account = credentials::account_key(selection.host.as_str(), &profile.user_id);

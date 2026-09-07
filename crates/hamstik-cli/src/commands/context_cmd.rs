@@ -14,6 +14,7 @@ use crate::error::CliError;
 
 use super::{emit_json, emit_view};
 
+/// Runs the `context` subcommands.
 pub async fn run(session: &mut Session<'_>, args: &ContextArgs) -> Result<(), CliError> {
     match &args.command {
         ContextCommand::Show { explain } => show(session, *explain),

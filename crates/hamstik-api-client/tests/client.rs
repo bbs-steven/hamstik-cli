@@ -1,6 +1,9 @@
 // Copyright 2026 Blackboard Studios
 // SPDX-License-Identifier: Apache-2.0
 
+// Integration tests assert with unwrap/expect by design.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! End-to-end transport tests for [`HamstikClient`] against a local wiremock.
 
 use std::sync::Arc;
@@ -49,7 +52,7 @@ async fn sends_auth_and_accept_and_captures_request_id() {
                     "id": "1",
                     "name": "Steven",
                     "email": "s@example.com",
-                    "authentication": {"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
+                    "authentication": {"authType":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
                     "defaultOrganization": null
                 })),
         )
@@ -104,7 +107,7 @@ async fn retries_transient_failure_then_succeeds() {
     let count = Arc::new(AtomicUsize::new(0));
     let body = json!({
         "id": "1", "name": "Steven", "email": "s@example.com",
-        "authentication": {"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
+        "authentication": {"authType":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
         "defaultOrganization": null
     });
     Mock::given(method("GET"))
@@ -382,4 +385,98 @@ fn work_item_json() -> serde_json::Value {
         "storyPoints":null,"dueDate":null,
         "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","revision":4
     })
+}
+
+// ---- Hardening behaviors ---------------------------------------------------
+
+/// A redirect response must surface as its own error and never be followed:
+/// the bearer token must not travel to another origin, and the response must
+/// not be presented as if it came from the original host.
+#[tokio::test]
+async fn redirects_are_never_followed() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(302).insert_header("Location", "/evil"))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    assert!(client.whoami().await.is_err());
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+/// An oversized response body must be rejected mid-stream instead of buffered:
+/// a compromised host must not be able to exhaust memory.
+#[tokio::test]
+async fn oversized_response_body_is_rejected() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![
+            b'x';
+            hamstik_api_client::client::MAX_BODY_BYTES
+                + 1
+        ]))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let err = client.whoami().await.unwrap_err();
+    assert!(err.to_string().contains("exceeds"), "{err}");
+}
+
+/// Terminal escape sequences from a hostile server must not survive into
+/// error messages or request ids.
+#[tokio::test]
+async fn server_error_text_has_control_characters_stripped() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+            "requestId": "req\u{1b}[31m-1",
+            "error": {"code": "FORBIDDEN\u{1b}[2J", "message": "no\u{7}pe"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let err = client.whoami().await.unwrap_err();
+    let api = err.as_api().unwrap();
+    // The ESC introducer is removed, so a printable tail cannot reassemble
+    // into a live escape sequence.
+    assert_eq!(api.code, "FORBIDDEN[2J");
+    assert_eq!(api.message, "nope");
+    assert_eq!(api.request_id.as_deref(), Some("req[31m-1"));
+}
+
+/// `--all` aggregation must terminate with an error against a server that
+/// always claims there is another page.
+#[tokio::test]
+async fn follow_all_terminates_on_an_endless_server() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [{"id":"1","slug":"a","name":"A","suspended":false}],
+            "page": {"limit": 1, "hasMore": true, "nextCursor": "same"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let result = follow_all(|cursor| {
+        let client = client.clone();
+        async move {
+            let resp = client
+                .list_organizations(ListOptions {
+                    limit: Some(1),
+                    cursor,
+                })
+                .await?;
+            Ok(PageItems::new(resp.value.items, &resp.raw, resp.value.page))
+        }
+    })
+    .await;
+    assert!(result.is_err(), "endless pagination must fail");
 }

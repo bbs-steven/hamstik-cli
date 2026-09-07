@@ -14,6 +14,7 @@ use crate::error::CliError;
 use super::org::render_lines;
 use super::{emit_json, emit_table, emit_view};
 
+/// Runs the `project` subcommands.
 pub async fn run(session: &mut Session<'_>, args: &ProjectArgs) -> Result<(), CliError> {
     match &args.command {
         ProjectCommand::List(pagination) => list(session, pagination).await,

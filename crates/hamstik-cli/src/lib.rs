@@ -15,6 +15,7 @@ pub mod credentials;
 pub mod environment;
 pub mod error;
 pub mod exit;
+pub mod fsutil;
 pub mod input;
 pub mod output;
 

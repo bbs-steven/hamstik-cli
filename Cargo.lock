@@ -862,6 +862,7 @@ name = "hamstik-api-client"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "httpdate",
  "pretty_assertions",
  "reqwest",

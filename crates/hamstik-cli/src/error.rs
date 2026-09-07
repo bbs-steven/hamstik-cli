@@ -38,6 +38,7 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
+    /// The stable `kind` string used in JSON envelopes.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -57,11 +58,17 @@ impl ErrorKind {
 #[derive(Debug, Error)]
 #[error("{message}")]
 pub struct CliError {
+    /// Broad failure category driving the exit code.
     pub kind: ErrorKind,
+    /// Stable machine-readable error code.
     pub code: String,
+    /// Human-readable message (rendered to stderr).
     pub message: String,
+    /// Server correlation id, when the failure came from an API response.
     pub request_id: Option<String>,
+    /// HTTP status, when the failure came from an API response.
     pub status: Option<u16>,
+    /// Underlying error, when one exists.
     #[source]
     pub source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
@@ -78,14 +85,17 @@ impl CliError {
         }
     }
 
+    /// Builds a usage error (exit 2).
     pub fn usage(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Usage, "INVALID_INPUT", message)
     }
 
+    /// Builds a local configuration error (exit 10).
     pub fn config(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Configuration, "CONFIGURATION_ERROR", message)
     }
 
+    /// Builds a credential-store error (exit 10).
     pub fn credential(message: impl Into<String>) -> Self {
         Self::new(
             ErrorKind::CredentialStore,
@@ -94,18 +104,22 @@ impl CliError {
         )
     }
 
+    /// Builds a network/transport error (exit 8).
     pub fn network(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Network, "NETWORK_ERROR", message)
     }
 
+    /// Builds a server-contract error (exit 9).
     pub fn protocol(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Protocol, "PROTOCOL_ERROR", message)
     }
 
+    /// Builds an internal/IO error (exit 1).
     pub fn general(message: impl std::fmt::Display) -> Self {
         Self::new(ErrorKind::Internal, "INTERNAL_ERROR", message.to_string())
     }
 
+    /// Builds an authentication-required error (exit 3).
     pub fn auth(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Auth, "AUTH_REQUIRED", message)
     }
@@ -192,6 +206,8 @@ fn exit_code_for_api_code(code: &str, status: u16) -> i32 {
 }
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

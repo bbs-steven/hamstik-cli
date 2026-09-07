@@ -1,6 +1,9 @@
 // Copyright 2026 Blackboard Studios
 // SPDX-License-Identifier: Apache-2.0
 
+// Integration tests assert with unwrap/expect by design.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! End-to-end CLI tests: drive the compiled `hamstik` binary against a local
 //! wiremock server. Credentials use the ephemeral `HAMSTIK_TOKEN` path so the
 //! tests never touch an OS keyring.
@@ -30,7 +33,7 @@ fn work_item_json(status: &str, revision: i64) -> Value {
 fn me_json() -> Value {
     json!({
         "id": "u1", "name": "Steven", "email": "steven@example.com",
-        "authentication": {"type": "pat", "credentialId": "c", "credentialName": "n", "scopes": [], "expiresAt": "2027-01-01T00:00:00Z"},
+        "authentication": {"authType": "pat", "credentialId": "c", "credentialName": "n", "scopes": [], "expiresAt": "2027-01-01T00:00:00Z"},
         "defaultOrganization": null
     })
 }
@@ -382,32 +385,45 @@ fn short_help_prints_banner_to_stdout() {
         .stdout(predicate::str::contains(BANNER_FOOTER));
 }
 
+/// A bare `hamstik` is a usage error: clap's missing-subcommand help goes to
+/// stderr (so failure output is never mistaken for success content) with exit
+/// code 2.
 #[test]
-fn bare_invocation_prints_banner_to_stdout_and_exits_two() {
+fn bare_invocation_is_a_usage_error_on_stderr() {
     let dir = TempDir::new().unwrap();
     banner_command(&dir)
         .assert()
         .code(2)
-        .stdout(predicate::str::contains(BANNER_ART))
-        .stdout(predicate::str::contains(BANNER_FOOTER))
-        .stderr(predicate::str::is_empty());
+        .stderr(predicate::str::contains("Usage: hamstik"))
+        .stdout(predicate::str::is_empty());
 }
 
+/// `-V`/`--version` are the machine-parsed surfaces: one terse line. The
+/// banner lives on the human `hamstik version` path only.
 #[test]
-fn version_surfaces_print_banner() {
+fn version_flag_is_terse_and_version_command_prints_banner() {
     let dir = TempDir::new().unwrap();
-    for args in [&["--version"][..], &["-V"][..], &["version"][..]] {
+    for args in [&["--version"][..], &["-V"][..]] {
         banner_command(&dir)
             .args(args)
             .assert()
             .success()
-            .stdout(predicate::str::contains(BANNER_ART))
-            .stdout(predicate::str::contains(BANNER_FOOTER))
-            .stdout(predicate::str::contains(format!(
-                "v{}",
+            .stdout(predicates::ord::eq(format!(
+                "hamstik {}\n",
                 env!("CARGO_PKG_VERSION")
-            )));
+            )))
+            .stdout(predicate::str::contains(BANNER_ART).not());
     }
+    banner_command(&dir)
+        .arg("version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(BANNER_ART))
+        .stdout(predicate::str::contains(BANNER_FOOTER))
+        .stdout(predicate::str::contains(format!(
+            "v{}",
+            env!("CARGO_PKG_VERSION")
+        )));
 }
 
 #[test]
@@ -612,4 +628,77 @@ fn doctor_reports_a_corrupt_context_file_with_its_path() {
         .assert()
         .code(10)
         .stdout(predicate::str::contains(expected_path));
+}
+
+// ---- Hardening behaviors ---------------------------------------------------
+
+/// A hostile or looping server must not be able to keep `--all` running: the
+/// aggregation budget terminates the command with a protocol error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_list_all_terminates_on_an_endless_server() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM/work-items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [work_item_json("todo", 1)],
+            "page": {"limit": 1, "hasMore": true, "nextCursor": "same"}
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["--org", "acme", "--project", "HAM", "work", "list", "--all"])
+        .assert()
+        .code(9)
+        .stderr(predicate::str::contains("exceeded"));
+}
+
+/// `HAMSTIK_TOKEN` containing a control character is rejected before any
+/// network activity: such a value can corrupt header framing and can never be
+/// a valid PAT.
+#[test]
+fn env_token_with_control_characters_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    config_command(&dir)
+        .env("HAMSTIK_HOST", "http://localhost:1")
+        .env("HAMSTIK_TOKEN", "tok\u{1b}[31m")
+        .args(["auth", "status"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("control characters"));
+}
+
+/// An oversized token piped to `--with-token` fails fast with a clear error.
+#[test]
+fn login_with_token_rejects_oversized_input() {
+    let dir = TempDir::new().unwrap();
+    let big = "x".repeat(8 * 1024);
+    config_command(&dir)
+        .env("HAMSTIK_HOST", "http://localhost:1")
+        .args(["auth", "login", "--with-token"])
+        .write_stdin(big)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("byte limit"));
+}
+
+/// The response-body cap and redirect refusal are enforced end-to-end through
+/// the real binary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn redirect_is_not_followed_end_to_end() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(302).insert_header("Location", "/evil"))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["auth", "status"])
+        .assert()
+        .failure();
+    // Exactly one request: the redirect was never followed.
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }

@@ -13,6 +13,7 @@ use crate::error::CliError;
 
 use super::{emit_json, emit_table, emit_view};
 
+/// Runs the `org` subcommands.
 pub async fn run(session: &mut Session<'_>, args: &OrgArgs) -> Result<(), CliError> {
     match &args.command {
         OrgCommand::List(pagination) => list(session, pagination).await,

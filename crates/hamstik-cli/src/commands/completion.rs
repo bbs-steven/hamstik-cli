@@ -9,6 +9,7 @@ use crate::app::Session;
 use crate::args::{Cli, CompletionArgs};
 use crate::error::CliError;
 
+/// Prints the completion script for the requested shell.
 pub fn run(session: &mut Session<'_>, args: &CompletionArgs) -> Result<(), CliError> {
     let mut command = Cli::command();
     let mut script = Vec::new();

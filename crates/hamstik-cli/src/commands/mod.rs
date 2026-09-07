@@ -17,6 +17,7 @@ use crate::app::Session;
 use crate::args::Command;
 use crate::error::CliError;
 
+/// Runs the selected subcommand against the session.
 pub async fn dispatch(session: &mut Session<'_>, command: &Command) -> Result<(), CliError> {
     match command {
         Command::Auth(args) => auth::run(session, args).await,

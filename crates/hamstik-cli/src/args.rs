@@ -21,9 +21,11 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
     arg_required_else_help = true
 )]
 pub struct Cli {
+    /// Options shared by every subcommand.
     #[command(flatten)]
     pub global: GlobalOptions,
 
+    /// The subcommand to run.
     #[command(subcommand)]
     pub command: Command,
 }
@@ -76,6 +78,7 @@ pub struct GlobalOptions {
     pub ca_bundle: Option<PathBuf>,
 }
 
+/// Every CLI subcommand.
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Manage authentication and profiles.
@@ -96,12 +99,15 @@ pub enum Command {
     Version,
 }
 
+/// Arguments for the `auth` command group.
 #[derive(Args, Debug)]
 pub struct AuthArgs {
+    /// The auth subcommand to run.
     #[command(subcommand)]
     pub command: AuthCommand,
 }
 
+/// Authentication and profile management subcommands.
 #[derive(Subcommand, Debug)]
 pub enum AuthCommand {
     /// Authenticate with a Personal Access Token.
@@ -123,18 +129,25 @@ pub enum AuthCommand {
     Logout,
     /// Log out and forget a profile: remove its stored credential and its
     /// config entry (does not revoke the server-side PAT).
+    ///
+    /// Unlike `logout`, this runs even while HAMSTIK_TOKEN is set: forget is
+    /// explicit about the profile being removed, not about the credential
+    /// currently in use.
     Forget {
         /// Profile to forget (defaults to the selected profile).
         profile: Option<String>,
     },
 }
 
+/// Arguments for the `context` command group.
 #[derive(Args, Debug)]
 pub struct ContextArgs {
+    /// The context subcommand to run.
     #[command(subcommand)]
     pub command: ContextCommand,
 }
 
+/// Working-context subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ContextCommand {
     /// Show the resolved context.
@@ -158,12 +171,15 @@ pub enum ContextCommand {
     Init,
 }
 
+/// Arguments for the `org` command group.
 #[derive(Args, Debug)]
 pub struct OrgArgs {
+    /// The org subcommand to run.
     #[command(subcommand)]
     pub command: OrgCommand,
 }
 
+/// Organization subcommands.
 #[derive(Subcommand, Debug)]
 pub enum OrgCommand {
     /// List organizations you belong to.
@@ -180,12 +196,15 @@ pub enum OrgCommand {
     },
 }
 
+/// Arguments for the `project` command group.
 #[derive(Args, Debug)]
 pub struct ProjectArgs {
+    /// The project subcommand to run.
     #[command(subcommand)]
     pub command: ProjectCommand,
 }
 
+/// Project subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ProjectCommand {
     /// List projects in the organization.
@@ -216,12 +235,15 @@ pub struct PaginationArgs {
     pub all: bool,
 }
 
+/// Arguments for the `work` command group.
 #[derive(Args, Debug)]
 pub struct WorkArgs {
+    /// The work subcommand to run.
     #[command(subcommand)]
     pub command: WorkCommand,
 }
 
+/// Work item subcommands.
 #[derive(Subcommand, Debug)]
 pub enum WorkCommand {
     /// List work items.
@@ -262,6 +284,7 @@ pub enum WorkCommand {
     Comment(CommentArgs),
 }
 
+/// Arguments for `work list`.
 #[derive(Args, Debug)]
 pub struct WorkListArgs {
     /// Free-text search.
@@ -303,10 +326,12 @@ pub struct WorkListArgs {
     /// Shorthand for --assignee me.
     #[arg(long)]
     pub mine: bool,
+    /// Pagination options.
     #[command(flatten)]
     pub pagination: PaginationArgs,
 }
 
+/// Arguments for `work create`.
 #[derive(Args, Debug)]
 pub struct WorkCreateArgs {
     /// Work item title.
@@ -318,21 +343,28 @@ pub struct WorkCreateArgs {
     /// Description source (path, or - for stdin).
     #[arg(long = "description-file", value_name = "PATH")]
     pub description_file: Option<String>,
+    /// Work item type.
     #[arg(long = "type", value_enum)]
     pub item_type: Option<TypeArg>,
     /// Initial status.
     #[arg(long, value_enum)]
     pub status: Option<StatusArg>,
+    /// Priority.
     #[arg(long, value_enum)]
     pub priority: Option<PriorityArg>,
+    /// Assignee user id (or `me`).
     #[arg(long, value_name = "USER|me")]
     pub assignee: Option<String>,
+    /// Sprint id.
     #[arg(long, value_name = "SPRINT")]
     pub sprint: Option<String>,
+    /// Parent work item key.
     #[arg(long, value_name = "KEY")]
     pub parent: Option<String>,
+    /// Story point estimate.
     #[arg(long = "story-points", value_name = "N")]
     pub story_points: Option<i64>,
+    /// Due date (RFC 3339).
     #[arg(long = "due-date", value_name = "DATE")]
     pub due_date: Option<String>,
     /// Explicit idempotency key.
@@ -340,12 +372,15 @@ pub struct WorkCreateArgs {
     pub idempotency_key: Option<String>,
 }
 
+/// Arguments for `work edit`.
 #[derive(Args, Debug)]
 pub struct WorkEditArgs {
     /// Work item key.
     pub key: String,
+    /// New title.
     #[arg(long, conflicts_with = "clear_description")]
     pub title: Option<String>,
+    /// New description text.
     #[arg(long, conflicts_with = "clear_description")]
     pub description: Option<String>,
     #[arg(
@@ -353,15 +388,21 @@ pub struct WorkEditArgs {
         value_name = "PATH",
         conflicts_with = "clear_description"
     )]
+    /// New description source (path, or - for stdin).
     pub description_file: Option<String>,
+    /// New work item type.
     #[arg(long = "type", value_enum)]
     pub item_type: Option<TypeArg>,
+    /// New priority.
     #[arg(long, value_enum)]
     pub priority: Option<PriorityArg>,
+    /// New assignee (or `me`).
     #[arg(long, value_name = "USER|me", conflicts_with = "clear_assignee")]
     pub assignee: Option<String>,
+    /// New sprint id.
     #[arg(long, value_name = "SPRINT", conflicts_with = "clear_sprint")]
     pub sprint: Option<String>,
+    /// New parent key.
     #[arg(long, value_name = "KEY", conflicts_with = "clear_parent")]
     pub parent: Option<String>,
     #[arg(
@@ -369,23 +410,31 @@ pub struct WorkEditArgs {
         value_name = "N",
         conflicts_with = "clear_story_points"
     )]
+    /// New story point estimate.
     pub story_points: Option<i64>,
     #[arg(
         long = "due-date",
         value_name = "DATE",
         conflicts_with = "clear_due_date"
     )]
+    /// New due date (RFC 3339).
     pub due_date: Option<String>,
+    /// Clear the description.
     #[arg(long = "clear-description")]
     pub clear_description: bool,
+    /// Unassign the item.
     #[arg(long = "clear-assignee")]
     pub clear_assignee: bool,
+    /// Remove the sprint.
     #[arg(long = "clear-sprint")]
     pub clear_sprint: bool,
+    /// Detach the parent.
     #[arg(long = "clear-parent")]
     pub clear_parent: bool,
+    /// Clear the story point estimate.
     #[arg(long = "clear-story-points")]
     pub clear_story_points: bool,
+    /// Clear the due date.
     #[arg(long = "clear-due-date")]
     pub clear_due_date: bool,
     /// Bypass revision conflict protection (If-Match: *).
@@ -393,18 +442,22 @@ pub struct WorkEditArgs {
     pub force: bool,
 }
 
+/// Arguments for the `work comment` command group.
 #[derive(Args, Debug)]
 pub struct CommentArgs {
+    /// The comment subcommand to run.
     #[command(subcommand)]
     pub command: CommentCommand,
 }
 
+/// Comment subcommands.
 #[derive(Subcommand, Debug)]
 pub enum CommentCommand {
     /// List comments on a work item.
     List {
         /// Work item key.
         key: String,
+        /// Pagination options.
         #[command(flatten)]
         pagination: PaginationArgs,
     },
@@ -427,6 +480,7 @@ pub enum CommentCommand {
     },
 }
 
+/// Arguments for `completion`.
 #[derive(Args, Debug)]
 pub struct CompletionArgs {
     /// Target shell.
@@ -439,19 +493,25 @@ pub struct CompletionArgs {
 /// Work item statuses (request-side validation).
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatusArg {
+    /// Not started.
     #[value(name = "backlog")]
     Backlog,
+    /// Ready to work.
     #[value(name = "todo")]
     Todo,
+    /// Actively being worked.
     #[value(name = "in_progress")]
     InProgress,
+    /// Awaiting review.
     #[value(name = "in_review")]
     InReview,
+    /// Completed.
     #[value(name = "done")]
     Done,
 }
 
 impl StatusArg {
+    /// The wire value for this status.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -467,14 +527,20 @@ impl StatusArg {
 /// Work item types (request-side validation).
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypeArg {
+    /// A unit of work.
     Task,
+    /// A defect.
     Bug,
+    /// A user story.
     Story,
+    /// A feature request.
     Feature,
+    /// A large body of work.
     Epic,
 }
 
 impl TypeArg {
+    /// The wire value for this type.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -490,13 +556,18 @@ impl TypeArg {
 /// Priorities (request-side validation).
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PriorityArg {
+    /// Low priority.
     Low,
+    /// Medium priority.
     Medium,
+    /// High priority.
     High,
+    /// Drop everything.
     Urgent,
 }
 
 impl PriorityArg {
+    /// The wire value for this priority.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -511,12 +582,16 @@ impl PriorityArg {
 /// List scope filter.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScopeArg {
+    /// Every work item.
     All,
+    /// Items not in a terminal status.
     Open,
+    /// Items in a terminal status.
     Closed,
 }
 
 impl ScopeArg {
+    /// The wire value for this scope.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -528,6 +603,8 @@ impl ScopeArg {
 }
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use clap::CommandFactory;

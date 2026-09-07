@@ -16,8 +16,11 @@ use crate::error::CliError;
 /// The three mutually-exclusive output modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
+    /// Human-readable tables and detail views.
     Human,
+    /// Stable JSON envelopes.
     Json,
+    /// Only essential identifiers.
     Quiet,
 }
 
@@ -30,6 +33,7 @@ pub struct Output {
 }
 
 impl Output {
+    /// Wraps the two streams with a mode and verbosity flag.
     #[must_use]
     pub fn new(mode: Mode, verbose: bool, out: Box<dyn Write>, err: Box<dyn Write>) -> Self {
         Self {
@@ -40,16 +44,19 @@ impl Output {
         }
     }
 
+    /// The active output mode.
     #[must_use]
     pub fn mode(&self) -> Mode {
         self.mode
     }
 
+    /// True when machine JSON envelopes are expected on stdout.
     #[must_use]
     pub fn is_json(&self) -> bool {
         self.mode == Mode::Json
     }
 
+    /// True when only essential identifiers should be printed.
     #[must_use]
     pub fn is_quiet(&self) -> bool {
         self.mode == Mode::Quiet
@@ -160,6 +167,8 @@ fn write_row(out: &mut String, cells: &[&str], widths: &[usize]) {
 }
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::cell::RefCell;

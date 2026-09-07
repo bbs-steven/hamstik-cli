@@ -43,16 +43,19 @@ impl Environment for SystemEnvironment {
 #[derive(Debug, Default, Clone)]
 pub struct MapEnvironment {
     vars: BTreeMap<String, String>,
+    /// Whether stdin and stdout are both terminals.
     pub terminals: bool,
 }
 
 impl MapEnvironment {
     #[must_use]
+    /// Creates an empty environment.
     pub fn new() -> Self {
         Self::default()
     }
 
     #[must_use]
+    /// Sets one variable (builder style).
     pub fn with_var(mut self, key: &str, value: &str) -> Self {
         self.vars.insert(key.to_string(), value.to_string());
         self
@@ -74,6 +77,8 @@ impl Environment for MapEnvironment {
 }
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

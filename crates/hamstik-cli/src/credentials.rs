@@ -29,14 +29,18 @@ const BACKEND_PROBE: &str = "backend-probe";
 /// Credential-store failures (distinct from Hamstik authentication errors).
 #[derive(Debug, Error)]
 pub enum CredentialError {
+    /// The store could not be reached or the operation failed.
     #[error("{0}")]
     Unavailable(String),
 }
 
 /// Reads and writes PATs in a secure store.
 pub trait CredentialStore: Send + Sync {
+    /// Reads the secret for `account`; `Ok(None)` when absent.
     fn get(&self, account: &str) -> Result<Option<SecretString>, CredentialError>;
+    /// Stores (or replaces) the secret for `account`.
     fn set(&self, account: &str, secret: &SecretString) -> Result<(), CredentialError>;
+    /// Removes the secret for `account`; absent is fine.
     fn delete(&self, account: &str) -> Result<(), CredentialError>;
 }
 
@@ -46,6 +50,7 @@ pub fn account_key(host: &str, user_id: &str) -> String {
     format!("host={host};user={user_id}")
 }
 
+/// OS credential store backed by the `keyring` crate.
 /// OS credential store backed by the `keyring` crate.
 pub struct KeyringCredentialStore;
 
@@ -57,17 +62,26 @@ impl KeyringCredentialStore {
     /// drives a runtime panics. Every CLI command runs inside `tokio`, so the
     /// hop is mandatory here; keeping it inside this module preserves the
     /// synchronous [`CredentialStore`] seam for the rest of the code.
+    ///
+    /// A panic in the operation is not swallowed: its payload (the D-Bus or
+    /// backend message, usually a `&str`) is folded into the returned error so
+    /// the underlying failure stays diagnosable.
     fn on_store_thread<T, F>(operation: F) -> Result<T, CredentialError>
     where
         T: Send,
         F: FnOnce() -> Result<T, CredentialError> + Send,
     {
-        std::thread::scope(|scope| {
-            scope.spawn(operation).join().unwrap_or_else(|_| {
-                Err(CredentialError::Unavailable(
-                    "credential store worker failed".to_string(),
-                ))
-            })
+        std::thread::scope(|scope| match scope.spawn(operation).join() {
+            Ok(result) => result,
+            Err(panic_payload) => Err(CredentialError::Unavailable(
+                match panic_payload.downcast_ref::<&str>() {
+                    Some(message) => (*message).to_string(),
+                    None => match panic_payload.downcast_ref::<String>() {
+                        Some(message) => message.clone(),
+                        None => "credential store worker failed".to_string(),
+                    },
+                },
+            )),
         })
     }
 }
@@ -132,12 +146,17 @@ impl CredentialStore for KeyringCredentialStore {
 }
 
 /// In-memory store for tests (never used in production).
+///
+/// The mutex is expected (not unwrapped) with lock-poisoning tolerated: a
+/// poisoned lock here means a test thread panicked, and returning a store
+/// error beats cascading a panic.
 #[derive(Default)]
 pub struct MemoryCredentialStore {
     entries: Mutex<HashMap<String, String>>,
 }
 
 impl MemoryCredentialStore {
+    /// Creates an empty store.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -145,39 +164,37 @@ impl MemoryCredentialStore {
 
     /// Seeds a value for tests that pre-populate credentials.
     pub fn seed(&self, account: &str, secret: &str) {
+        self.lock().insert(account.to_string(), secret.to_string());
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
         self.entries
             .lock()
-            .expect("store lock")
-            .insert(account.to_string(), secret.to_string());
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
 impl CredentialStore for MemoryCredentialStore {
     fn get(&self, account: &str) -> Result<Option<SecretString>, CredentialError> {
-        let value = self
-            .entries
-            .lock()
-            .expect("store lock")
-            .get(account)
-            .cloned();
+        let value = self.lock().get(account).cloned();
         Ok(value.map(SecretString::from))
     }
 
     fn set(&self, account: &str, secret: &SecretString) -> Result<(), CredentialError> {
-        self.entries
-            .lock()
-            .expect("store lock")
+        self.lock()
             .insert(account.to_string(), secret.expose_secret().to_string());
         Ok(())
     }
 
     fn delete(&self, account: &str) -> Result<(), CredentialError> {
-        self.entries.lock().expect("store lock").remove(account);
+        self.lock().remove(account);
         Ok(())
     }
 }
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

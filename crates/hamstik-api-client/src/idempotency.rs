@@ -12,8 +12,10 @@ use uuid::Uuid;
 /// Errors for a client-supplied idempotency key.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum IdempotencyKeyError {
+    /// The key is shorter than 8 or longer than 128 characters.
     #[error("idempotency key must be between 8 and 128 characters")]
     InvalidLength,
+    /// The key contains characters outside the allowed set.
     #[error("idempotency key may only contain letters, digits, and . _ : -")]
     InvalidCharacters,
 }
@@ -42,6 +44,8 @@ pub fn validate_key(key: &str) -> Result<(), IdempotencyKeyError> {
 }
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

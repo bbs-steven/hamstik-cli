@@ -22,6 +22,7 @@ pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 /// Sleep abstraction so tests can substitute a zero-duration sleeper.
 #[async_trait]
 pub trait Sleeper: Send + Sync {
+    /// Waits for the given duration (async, non-blocking).
     async fn sleep(&self, duration: Duration);
 }
 
@@ -127,6 +128,8 @@ pub fn parse_retry_after(value: &str, now: SystemTime) -> Option<Duration> {
 pub type SharedSleeper = Arc<dyn Sleeper>;
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

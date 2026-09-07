@@ -3,17 +3,18 @@
 
 //! Global configuration file (`config.toml`).
 //!
-//! Stores non-secret profile metadata only (SPEC §23). Writes are atomic and
-//! size-capped; unknown fields are rejected so drift from a future CLI is loud.
+//! Stores non-secret profile metadata only (SPEC §23). Writes are atomic,
+//! durable, and size-capped; unknown fields are rejected so drift from a future
+//! CLI is loud.
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::CliError;
+use crate::fsutil;
 
 /// Current configuration schema version.
 pub const CONFIG_VERSION: u32 = 1;
@@ -25,11 +26,16 @@ pub const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
+    /// The host origin this credential belongs to.
     pub host: String,
+    /// The Hamstik user id (part of the keyring account key).
     pub user_id: String,
+    /// The account email (display only; never used for auth).
     pub email: String,
+    /// Default organization slug for this profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_organization: Option<String>,
+    /// Default project key for this profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_project: Option<String>,
 }
@@ -38,9 +44,12 @@ pub struct Profile {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
+    /// On-disk schema version.
     pub version: u32,
+    /// The profile selected by default, when one is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_profile: Option<String>,
+    /// All configured profiles, keyed by profile name.
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
 }
@@ -62,11 +71,13 @@ pub struct ConfigStore {
 }
 
 impl ConfigStore {
+    /// Wraps a fixed path (from config-path resolution).
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
 
+    /// The file path this store reads and writes.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
@@ -125,12 +136,13 @@ impl ConfigStore {
         ))
     }
 
-    /// Atomically writes the config, creating parent directories as needed.
+    /// Atomically and durably writes the config, creating parent directories
+    /// as needed.
+    ///
+    /// The write goes through a unique temporary file that is synced to stable
+    /// storage before an atomic rename publishes it, so a crash can never leave
+    /// a torn or empty config behind. Permissions are restricted to the owner.
     pub fn save(&self, config: &ConfigFile) -> Result<(), CliError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| self.fail(&format!("cannot create parent directory ({err})")))?;
-        }
         let serialized = toml::to_string_pretty(config)
             .map_err(|err| self.fail(&format!("cannot serialize configuration ({err})")))?;
         let bytes = serialized.as_bytes();
@@ -138,16 +150,8 @@ impl ConfigStore {
             return Err(self.fail("configuration would exceed the 1 MiB limit"));
         }
 
-        let temp = self.path.with_extension("toml.tmp");
-        {
-            let mut file = fs::File::create(&temp)
-                .map_err(|err| self.fail(&format!("cannot write temporary file ({err})")))?;
-            file.write_all(bytes)
-                .map_err(|err| self.fail(&format!("cannot write temporary file ({err})")))?;
-            file.flush()
-                .map_err(|err| self.fail(&format!("cannot write temporary file ({err})")))?;
-        }
-        fs::rename(&temp, self.path())
+        fsutil::write_atomic(self.path(), bytes)
+            .and_then(|()| fsutil::restrict_permissions(self.path()))
             .map_err(|err| self.fail(&format!("cannot replace file ({err})")))?;
         Ok(())
     }
@@ -233,6 +237,8 @@ pub fn unique_profile_name(config: &ConfigFile, base: &str, user_id: &str, host:
 }
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -21,6 +21,7 @@ use crate::input::resolve_text;
 use super::org::render_lines;
 use super::{emit_json, emit_table, emit_view};
 
+/// Runs the `work` subcommands.
 pub async fn run(session: &mut Session<'_>, args: &WorkArgs) -> Result<(), CliError> {
     match &args.command {
         WorkCommand::List(list_args) => list(session, list_args).await,

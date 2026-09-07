@@ -21,29 +21,41 @@ use hamstik_cli::environment::SystemEnvironment;
 use hamstik_cli::input::TerminalInput;
 
 fn main() {
-    let runtime = match tokio::runtime::Runtime::new() {
+    // The CLI is strictly sequential: one command, no concurrency. A
+    // current-thread runtime starts faster and carries no worker threads.
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("error: failed to start runtime: {err}");
             std::process::exit(hamstik_cli::exit::GENERAL);
         }
     };
-    let code = runtime.block_on(entry());
+    let code = match runtime.block_on(entry()) {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("error: {message}");
+            hamstik_cli::exit::CONFIGURATION
+        }
+    };
     let _ = io::stdout().flush();
     std::process::exit(code);
 }
 
-async fn entry() -> i32 {
+async fn entry() -> Result<i32, String> {
     let command = Cli::command().help_template(banner::root_help_template());
     let matches = match command.try_get_matches() {
         Ok(matches) => matches,
-        Err(err) => return render_clap_error(&err),
+        Err(err) => return Ok(render_clap_error(&err)),
     };
     let cli = match Cli::from_arg_matches(&matches) {
         Ok(cli) => cli,
-        Err(err) => return render_clap_error(&err),
+        Err(err) => return Ok(render_clap_error(&err)),
     };
-    let config = ConfigStore::new(resolve_config_path());
+    let config_path = resolve_config_path()?;
+    let config = ConfigStore::new(config_path);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     let environment = SystemEnvironment;
@@ -62,35 +74,51 @@ async fn entry() -> i32 {
         stderr: Box::new(io::stderr()),
     };
 
-    app::run(cli, services).await
+    Ok(app::run(cli, services).await)
 }
 
 /// Renders clap-generated errors, keeping the banner on stdout only.
 ///
-/// - `--version`/`-V`: print the banner to stdout, exit success.
-/// - Help (root/subcommand `--help`, and the bare-invocation help): print to
-///   stdout while preserving clap's numeric exit code (0 for `--help`, 2 for
-///   the missing-subcommand help). The banner rides in the root help template.
-/// - Anything else: defer to clap's own rendering on stderr.
+/// - `--version`/`-V`: one terse `hamstik <version>` line on stdout (the
+///   machine-parsed surface), exit success. The full banner stays on the
+///   human `hamstik version` path and the root help.
+/// - Help (root/subcommand `--help`): printed to stdout while preserving
+///   clap's numeric exit code. The banner rides in the root help template.
+/// - Usage errors and the missing-subcommand help: clap's own rendering on
+///   stderr, so failure output is never mistaken for success content.
 fn render_clap_error(err: &clap::Error) -> i32 {
     match err.kind() {
         ErrorKind::DisplayVersion => {
-            println!("{}", banner::banner());
+            println!("hamstik {}", env!("CARGO_PKG_VERSION"));
             hamstik_cli::exit::SUCCESS
         }
-        ErrorKind::DisplayHelp | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+        ErrorKind::DisplayHelp => {
             print!("{err}");
             err.exit_code()
+        }
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+            // A bare `hamstik` or `hamstik <unknown>` is an error, not help:
+            // keep the exit code and clap's stderr rendering.
+            err.exit()
         }
         _ => err.exit(),
     }
 }
 
-fn resolve_config_path() -> PathBuf {
+/// Resolves the config file path (SPEC §23).
+///
+/// Unlike every other input this is not overridable per-command and cannot be
+/// repaired with a flag, so an undeterminable home directory fails with
+/// guidance instead of silently scattering config into the working directory.
+fn resolve_config_path() -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("HAMSTIK_CONFIG") {
-        return PathBuf::from(path);
+        return Ok(PathBuf::from(path));
     }
     directories::ProjectDirs::from("com", "blackboard", "hamstik")
         .map(|dirs| dirs.config_dir().join("config.toml"))
-        .unwrap_or_else(|| PathBuf::from(".hamstik").join("config.toml"))
+        .ok_or_else(|| {
+            "cannot determine the configuration directory (no home directory?); \
+             set HAMSTIK_CONFIG to an explicit path"
+                .to_string()
+        })
 }

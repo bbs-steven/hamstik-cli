@@ -27,14 +27,20 @@ pub const CONTEXT_FILENAME: &str = ".hamstik.toml";
 /// Where a resolved value came from (for `context show --explain`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
+    /// A `--flag` on this invocation.
     Cli,
+    /// An environment variable.
     Env,
+    /// A `.hamstik.toml` value.
     ContextFile,
+    /// The active profile's stored default.
     Profile,
+    /// Nothing set anywhere; the built-in default applies.
     Default,
 }
 
 impl Source {
+    /// Human-readable source label (parenthesized annotations).
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -62,7 +68,9 @@ impl Source {
 /// A resolved value together with its winning source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedField {
+    /// The resolved value, when any source provided one.
     pub value: Option<String>,
+    /// The source that won precedence.
     pub source: Source,
 }
 
@@ -70,11 +78,15 @@ pub struct ResolvedField {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ContextFile {
+    /// On-disk schema version.
     pub version: u32,
+    /// Host origin for work done in this directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Default organization slug for this directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organization: Option<String>,
+    /// Default project key for this directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
 }
@@ -82,13 +94,19 @@ pub struct ContextFile {
 /// The full resolved selection for a command invocation.
 #[derive(Debug, Clone)]
 pub struct Resolution {
+    /// The effective host (resolved value or the built-in default).
     pub host: String,
+    /// Where the host value came from.
     pub host_source: Source,
+    /// The selected profile name (attached by the caller).
     pub profile: Option<String>,
+    /// The effective organization slug and its source.
     pub organization: ResolvedField,
+    /// The effective project key and its source.
     pub project: ResolvedField,
 }
 
+/// Selects the active profile name (SPEC §28).
 /// Selects the active profile name (SPEC §28).
 pub fn select_profile(
     config: &ConfigFile,
@@ -115,6 +133,7 @@ pub fn select_profile(
 
 /// Resolves host/organization/project by precedence (SPEC §34).
 #[must_use]
+/// Resolves host/organization/project by precedence (SPEC §34).
 pub fn resolve(
     cli: (&Option<String>, &Option<String>, &Option<String>),
     env: &dyn Environment,
@@ -229,6 +248,7 @@ fn pick_string(
 
 /// Searches upward from `start` for the nearest `.hamstik.toml`.
 #[must_use]
+/// Searches upward from `start` for the nearest `.hamstik.toml`.
 pub fn discover(start: &Path) -> Option<PathBuf> {
     let mut current = Some(start);
     while let Some(dir) = current {
@@ -245,6 +265,7 @@ pub fn discover(start: &Path) -> Option<PathBuf> {
 ///
 /// Failures always name the file: `.hamstik.toml` is discovered by walking up
 /// from the working directory, so the user cannot guess which one broke.
+/// Loads and validates a context file.
 pub fn load(path: &Path) -> Result<ContextFile, CliError> {
     let metadata =
         fs::metadata(path).map_err(|err| fail(path, &format!("cannot read file ({err})")))?;
@@ -282,18 +303,26 @@ fn fail(path: &Path, reason: &str) -> CliError {
 }
 
 /// Writes a context file to disk.
+///
+/// The write is atomic and durable (unique temp file, synced, renamed) so a
+/// crash or concurrent invocation can never leave a torn `.hamstik.toml`, and
+/// a pre-planted symlink cannot redirect it. Permissions are restricted to the
+/// owner.
 pub fn save(path: &Path, context: &ContextFile) -> Result<(), CliError> {
     if context.version == 0 {
         return Err(CliError::config("internal error: context version not set"));
     }
     let serialized = toml::to_string_pretty(context)
         .map_err(|err| CliError::config(format!("cannot serialize context: {err}")))?;
-    fs::write(path, serialized)
+    crate::fsutil::write_atomic(path, serialized.as_bytes())
+        .and_then(|()| crate::fsutil::restrict_permissions(path))
         .map_err(|err| CliError::config(format!("cannot write context file: {err}")))?;
     Ok(())
 }
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::environment::MapEnvironment;

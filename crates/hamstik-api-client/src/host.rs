@@ -17,6 +17,9 @@ pub const DEFAULT_HOST: &str = "https://hamstik.com";
 /// A `Host` always stores a bare origin (`scheme://host[:port]`). The `/api/v1`
 /// prefix and resource path segments are appended by the client and are always
 /// percent-encoded, so callers can pass arbitrary slugs/keys safely.
+///
+/// HTTPS is required for every host except true loopback addresses, where
+/// plain `http` is permitted for local development.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Host {
     url: Url,
@@ -32,8 +35,10 @@ impl Host {
     /// Parses and validates a user-supplied host string.
     ///
     /// A missing scheme defaults to `https`. HTTPS is always required except
-    /// for loopback hosts (`localhost`, `127.0.0.1`, any `127/8`, or `::1`)
-    /// where plain `http` is permitted for local development.
+    /// for true loopback hosts (`localhost` case-insensitive, any address in
+    /// `127.0.0.0/8`, or `::1`, matched on the parsed IP — not the raw string,
+    /// so `127.0.0.1.evil.com` can never pass) where plain `http` is permitted
+    /// for local development.
     pub fn parse(input: &str) -> Result<Self, HostError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
@@ -86,7 +91,10 @@ impl Host {
 
     /// The percent-encoded path for a resource under the `/api/v1` prefix.
     ///
-    /// Each supplied segment is percent-encoded individually.
+    /// Each supplied segment is percent-encoded individually. Segments that
+    /// would survive encoding as path navigation (`""`, `"."`, `".."`) are
+    /// rejected: dot segments on the wire can be normalized away by
+    /// intermediaries and change which resource is addressed.
     pub fn resource_url(&self, segments: &[&str]) -> Result<Url, HostError> {
         let mut url = self.url.clone();
         {
@@ -97,6 +105,9 @@ impl Host {
             path.push("api");
             path.push("v1");
             for segment in segments {
+                if *segment == "." || *segment == ".." || segment.is_empty() {
+                    return Err(HostError::ForbiddenPathSegment((*segment).to_string()));
+                }
                 path.push(segment);
             }
         }
@@ -111,14 +122,25 @@ impl fmt::Display for Host {
 }
 
 fn is_loopback(url: &Url) -> bool {
-    match url.host_str() {
-        Some("localhost") | Some("::1") => true,
-        Some(host) => host == "[::1]" || host.starts_with("127."),
+    // Match on the *parsed* host so lookalikes (`127.0.0.1.evil.com`,
+    // `localhost.evil.com`) can never pass; string prefixes on the serialized
+    // form are not trustworthy.
+    match url.host() {
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback()
+                // IPv4-mapped IPv6 (::ffff:a.b.c.d) routes as the embedded v4
+                // address, so judge it by that address.
+                || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
         None => false,
     }
 }
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -159,8 +181,34 @@ mod tests {
     #[test]
     fn allows_http_loopback_variants() {
         assert!(Host::parse("http://localhost:3000").is_ok());
+        assert!(Host::parse("http://LOCALHOST:3000").is_ok());
         assert!(Host::parse("http://127.0.0.1:3000").is_ok());
+        assert!(Host::parse("http://127.6.7.8:3000").is_ok());
         assert!(Host::parse("http://[::1]:3000").is_ok());
+        assert!(Host::parse("http://[0:0:0:0:0:0:0:1]:3000").is_ok());
+        // IPv4-mapped IPv6 loopback: the mapped v4 address is a loopback.
+        assert!(Host::parse("http://[::ffff:127.0.0.1]:3000").is_ok());
+    }
+
+    #[test]
+    fn lookalike_loopback_domains_are_not_loopback() {
+        // A hostname that merely *starts* with a loopback address or the word
+        // "localhost" resolves to a remote machine; plain http must be refused
+        // so a phished --host cannot receive the token in cleartext.
+        assert_eq!(
+            Host::parse("http://127.0.0.1.evil.com"),
+            Err(HostError::InsecureScheme)
+        );
+        assert_eq!(
+            Host::parse("http://localhost.evil.com"),
+            Err(HostError::InsecureScheme)
+        );
+        assert_eq!(
+            Host::parse("http://127.com"),
+            Err(HostError::InsecureScheme)
+        );
+        // Over HTTPS these are accepted as ordinary hosts (TLS protects them).
+        assert!(Host::parse("https://127.0.0.1.evil.com").is_ok());
     }
 
     #[test]
@@ -215,5 +263,28 @@ mod tests {
             host.resource_url(&[]).unwrap().as_str(),
             "https://hamstik.com/api/v1"
         );
+    }
+
+    #[test]
+    fn resource_url_rejects_path_navigation_segments() {
+        let host = Host::default_host().unwrap();
+        // Dot segments are percent-encoded by `push`, but intermediaries often
+        // normalize them away, changing which resource is addressed.
+        assert_eq!(
+            host.resource_url(&["organizations", "..", "me"]),
+            Err(HostError::ForbiddenPathSegment("..".to_string()))
+        );
+        assert_eq!(
+            host.resource_url(&["."]),
+            Err(HostError::ForbiddenPathSegment(".".to_string()))
+        );
+        assert_eq!(
+            host.resource_url(&[""]),
+            Err(HostError::ForbiddenPathSegment(String::new()))
+        );
+        // A slug that merely contains dots is fine; only whole-segment
+        // navigation is dangerous.
+        assert!(host.resource_url(&["organizations", "a.b.c"]).is_ok());
+        assert!(host.resource_url(&["work-items", "HAM..1"]).is_ok());
     }
 }

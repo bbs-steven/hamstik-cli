@@ -15,6 +15,13 @@ authors = ["Blackboard Studios"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# Tests legitimately unwrap to assert on expected successes, so the denial is
+# scoped per-crate below rather than workspace-wide.
+unwrap_used = "warn"
+expect_used = "warn"
 
 [workspace.dependencies]
 # Shared runtime / serialization
@@ -26,6 +33,7 @@ secrecy = { version = "0.10", features = ["serde"] }
 
 # API client
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json"] }
+bytes = "1"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 async-trait = "0.1"

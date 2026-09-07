@@ -11,20 +11,30 @@ use thiserror::Error;
 /// Errors produced while validating or normalizing a configured host.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum HostError {
+    /// The configured host string is empty or only whitespace.
     #[error("host must not be empty")]
     Empty,
+    /// The host is not a parseable URL.
     #[error("invalid host URL: {0}")]
     InvalidUrl(String),
+    /// The scheme is neither `https` nor `http`.
     #[error("unsupported URL scheme {0:?}; only https (or http for loopback) is allowed")]
     UnsupportedScheme(String),
+    /// Plain `http` was used for a host that is not loopback.
     #[error("insecure http is only permitted for loopback hosts")]
     InsecureScheme,
+    /// The URL embeds a username or password.
     #[error("embedded credentials are not allowed in the host URL")]
     CredentialsForbidden,
+    /// The URL carries a query string or fragment.
     #[error("query and fragment components are not allowed in the host URL")]
     QueryFragmentForbidden,
+    /// The URL carries a path; the client builds `/api/v1` paths itself.
     #[error("host URL must not include a path; the /api/v1 prefix is added automatically")]
     PathForbidden,
+    /// A request path segment would navigate the path (`""`, `"."`, `".."`).
+    #[error("path segment {0:?} is not allowed (empty, \".\", and \"..\" would navigate the path)")]
+    ForbiddenPathSegment(String),
 }
 
 /// A structured error returned by the Public API.
@@ -34,11 +44,17 @@ pub enum HostError {
 #[derive(Debug, Clone, Error)]
 #[error("{message}")]
 pub struct ApiError {
+    /// The HTTP status the server returned.
     pub status: u16,
+    /// The stable server error code (e.g. `NOT_FOUND`).
     pub code: String,
+    /// The server's human-readable message (control characters stripped).
     pub message: String,
+    /// Correlation id from the envelope or `X-Request-Id` header.
     pub request_id: Option<String>,
+    /// Per-field validation messages, keyed by field name.
     pub field_errors: BTreeMap<String, Vec<String>>,
+    /// The parsed `Retry-After` header, when the server sent one.
     pub retry_after: Option<Duration>,
 }
 

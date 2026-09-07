@@ -3,8 +3,6 @@
 
 //! `hamstik auth` (login / status / list / switch / logout / forget).
 
-use std::io::Read;
-
 use secrecy::SecretString;
 use serde_json::{json, value::Value};
 
@@ -13,9 +11,11 @@ use crate::args::{AuthArgs, AuthCommand};
 use crate::config::{self, Profile};
 use crate::credentials;
 use crate::error::CliError;
+use crate::input::read_token;
 
 use super::{emit_json, emit_table};
 
+/// Runs the `auth` subcommands.
 pub async fn run(session: &mut Session<'_>, args: &AuthArgs) -> Result<(), CliError> {
     match &args.command {
         AuthCommand::Login { with_token } => login(session, *with_token).await,
@@ -27,15 +27,28 @@ pub async fn run(session: &mut Session<'_>, args: &AuthArgs) -> Result<(), CliEr
     }
 }
 
+/// Validates a token and wraps it in a zeroizing [`SecretString`].
+///
+/// The value is moved into the zeroizing backing directly; intermediate plain
+/// copies are avoided.
+fn token_secret(raw: String) -> Result<SecretString, CliError> {
+    crate::input::token_to_secret(&raw).map_err(CliError::usage)
+}
+
+/// Builds an error that also drops a just-stored credential, so a failed login
+/// leaves no orphaned secret behind.
+fn login_rollback(session: &Session<'_>, account: &str, err: CliError) -> CliError {
+    let _ = session.store.delete(account);
+    err
+}
+
 async fn login(session: &mut Session<'_>, with_token: bool) -> Result<(), CliError> {
     let selection = session.selection()?;
 
-    let raw = if with_token {
-        let mut buffer = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buffer)
-            .map_err(|err| CliError::general(format!("cannot read token: {err}")))?;
-        buffer
+    let raw: String = if with_token {
+        let stdin = std::io::stdin();
+        read_token(stdin.lock())
+            .map_err(|err| CliError::usage(format!("cannot read token: {err}")))?
     } else if let Some(token) = session.env.var("HAMSTIK_TOKEN") {
         token
     } else if session.can_prompt() {
@@ -49,10 +62,7 @@ async fn login(session: &mut Session<'_>, with_token: bool) -> Result<(), CliErr
         ));
     };
 
-    if raw.trim().is_empty() {
-        return Err(CliError::usage("token is empty"));
-    }
-    let secret = SecretString::new(raw.trim().to_string().into());
+    let secret = token_secret(raw)?;
 
     let api = session.build_client(selection.host.clone(), secret.clone())?;
     let me = api.whoami().await.map_err(CliError::from_client)?;
@@ -80,7 +90,11 @@ async fn login(session: &mut Session<'_>, with_token: bool) -> Result<(), CliErr
     };
     config.profiles.insert(name.clone(), profile);
     config.active_profile = Some(name.clone());
-    session.config.save(&config)?;
+    if let Err(err) = session.config.save(&config) {
+        // The profile entry did not land; do not leave an unreachable secret
+        // in the OS store.
+        return Err(login_rollback(session, &account, err));
+    }
 
     if session.json() {
         emit_json(
@@ -165,7 +179,7 @@ fn resolve_status_token(
     selection: &crate::app::Selection,
 ) -> Result<SecretString, CliError> {
     if let Some(token) = session.env.var("HAMSTIK_TOKEN") {
-        return Ok(SecretString::new(token.into()));
+        return token_secret(token);
     }
     let profile = selection
         .profile_meta

@@ -21,15 +21,17 @@ pub mod retry;
 /// The `/api/v1` prefix every request is built under.
 pub const API_PREFIX: &str = "/api/v1";
 
-pub use client::{ApiResponse, ClientConfig, HamstikApi, HamstikClient};
+pub use client::{ApiResponse, ClientConfig, HamstikApi, HamstikClient, sanitize_server_text};
 pub use error::{ApiError, ClientError, HostError};
 pub use host::Host;
 pub use idempotency::{IdempotencyKeyError, generate_key, validate_key};
 pub use models::*;
-pub use pagination::{Page, PageItems, follow_all};
+pub use pagination::{MAX_FOLLOW_ITEMS, MAX_FOLLOW_PAGES, Page, PageItems, follow_all};
 pub use retry::{RetryPolicy, Sleeper, TokioSleeper};
 
 #[cfg(test)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

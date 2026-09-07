@@ -156,6 +156,10 @@ The API client should be asynchronous.
 
 Do not create a blocking HTTP implementation around an otherwise async CLI.
 
+The CLI executes one command per process and never requires task concurrency,
+so the entrypoint uses a `current_thread` runtime; keyring operations that
+cannot run inside a runtime hop to a short-lived worker thread.
+
 ---
 
 # 6. HTTP Client
@@ -176,7 +180,10 @@ Requirements:
 - connection timeout;
 - request timeout;
 - custom User-Agent;
-- custom CA bundle support where practical.
+- custom CA bundle support where practical;
+- redirects are NOT followed: the client is bound to one validated origin,
+  and following a redirect would replay the `Authorization` handshake to
+  another host while presenting the response as if it came from the original.
 
 User-Agent:
 
@@ -190,12 +197,14 @@ hamstik-cli/<version> (<os>; <arch>)
 
 Production hosts MUST use HTTPS.
 
-Exception:
+Exception: plain HTTP is allowed only for *true loopback hosts*, decided on
+the parsed host — never on a string prefix, so lookalikes such as
+`127.0.0.1.evil.com` or `localhost.evil.com` are never treated as loopback:
 
 ```text
-http://localhost
-http://127.0.0.1
-http://[::1]
+http://localhost          (case-insensitive exact name)
+http://127.0.0.0/8        (any address in the block)
+http://[::1]              (and IPv4-mapped IPv6 loopback, e.g. ::ffff:127.0.0.1)
 ```
 
 may be allowed for local development.
@@ -345,6 +354,11 @@ into generic:
 ```text
 request failed
 ```
+
+Server-supplied text (`message`, `code`, `requestId`, field-error keys and
+values) is attacker-influenced and MUST have control characters stripped
+before it is rendered, so terminal escape sequences cannot survive into CLI
+output. Empty values fall back to the status-derived defaults.
 
 ---
 
@@ -1054,6 +1068,11 @@ hamstik work list
 --all
 ```
 
+`--all` follows `nextCursor` until the server reports no more pages, subject
+to client-side budgets (1,000 pages / 50,000 items). A hostile or looping
+server therefore fails the command with a protocol error instead of spinning
+forever; the error tells the user to narrow the query.
+
 Convenience:
 
 ```text
@@ -1187,6 +1206,19 @@ A file argument of:
 ```
 
 means stdin.
+
+Reads are size-capped so a misdirected stream cannot exhaust memory:
+
+```text
+token (prompt / --with-token / HAMSTIK_TOKEN):  4 KiB
+description / comment bodies:                   1 MiB
+--ca-bundle / HAMSTIK_CA_BUNDLE:                2 MiB
+config.toml:                                    1 MiB
+.hamstik.toml:                                 64 KiB
+API response bodies:                           10 MiB
+```
+
+An oversized input is a local error, never a truncated read.
 
 ---
 

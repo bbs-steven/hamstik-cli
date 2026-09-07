@@ -29,15 +29,47 @@ use crate::output::{Mode, Output};
 
 /// Builds API clients behind a seam so tests can inject fakes.
 pub trait ApiFactory: Send + Sync {
+    /// Builds one client for the resolved request.
     fn build(&self, request: &ClientRequest) -> Result<Arc<dyn HamstikApi>, CliError>;
+}
+
+/// The largest CA bundle accepted (2 MiB) — a handful of PEM certificates plus
+/// slack; anything larger is not a trust store.
+const MAX_CA_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Reads a PEM CA bundle, capped at [`MAX_CA_BUNDLE_BYTES`].
+fn read_ca_bundle(path: &Path) -> Result<String, CliError> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|err| CliError::config(format!("cannot read CA bundle: {err}")))?;
+    if metadata.len() > MAX_CA_BUNDLE_BYTES as u64 {
+        return Err(CliError::config(format!(
+            "CA bundle at {} is too large (exceeds the {} byte limit)",
+            path.display(),
+            MAX_CA_BUNDLE_BYTES
+        )));
+    }
+    let pem = std::fs::read_to_string(path)
+        .map_err(|err| CliError::config(format!("cannot read CA bundle: {err}")))?;
+    if !pem.contains("-----BEGIN CERTIFICATE-----") {
+        return Err(CliError::config(format!(
+            "CA bundle at {} contains no PEM certificates",
+            path.display()
+        )));
+    }
+    Ok(pem)
 }
 
 /// Parameters for constructing one API client.
 pub struct ClientRequest<'a> {
+    /// The validated host origin.
     pub host: Host,
+    /// The bearer token for the request.
     pub token: SecretString,
+    /// Disable automatic retries (`--no-retry`).
     pub no_retry: bool,
+    /// Additional PEM root certificate bundle path.
     pub ca_bundle: Option<&'a Path>,
+    /// The `User-Agent` value.
     pub user_agent: String,
 }
 
@@ -54,8 +86,7 @@ impl ApiFactory for ProductionApiFactory {
             config.retry = hamstik_api_client::RetryPolicy::none();
         }
         if let Some(path) = request.ca_bundle {
-            let pem = std::fs::read_to_string(path)
-                .map_err(|err| CliError::config(format!("cannot read CA bundle: {err}")))?;
+            let pem = read_ca_bundle(path)?;
             config.ca_pem.push(pem);
         }
         let client = HamstikClient::new(request.host.clone(), request.token.clone(), config)
@@ -66,37 +97,61 @@ impl ApiFactory for ProductionApiFactory {
 
 /// External dependencies injected into [`run`].
 pub struct Services<'a> {
+    /// Environment variable lookups.
     pub env: &'a dyn Environment,
+    /// OS credential store.
     pub store: &'a dyn CredentialStore,
+    /// Global configuration file access.
     pub config: ConfigStore,
+    /// API client construction.
     pub factory: &'a dyn ApiFactory,
+    /// Interactive prompts.
     pub prompt: &'a mut dyn Prompt,
+    /// The process working directory (context discovery root).
     pub cwd: PathBuf,
+    /// Success output stream.
     pub stdout: Box<dyn Write>,
+    /// Diagnostic output stream.
     pub stderr: Box<dyn Write>,
 }
 
 /// The resolved selection for a single command invocation.
 pub struct Selection {
+    /// The effective host origin.
     pub host: Host,
+    /// Where the host value came from.
     pub host_source: Source,
+    /// The active profile name, when one is selected.
     pub profile: Option<String>,
+    /// The active profile's stored metadata, when configured.
     pub profile_meta: Option<Profile>,
+    /// The effective organization slug and its source.
     pub organization: ResolvedField,
+    /// The effective project key and its source.
     pub project: ResolvedField,
+    /// The `.hamstik.toml` in effect, when one was discovered.
     pub context_path: Option<PathBuf>,
+    /// True when the token comes from `HAMSTIK_TOKEN` (never persisted).
     pub ephemeral_token: bool,
 }
 
 /// A command execution context bundling services with resolved state.
 pub struct Session<'a> {
+    /// Output renderer.
     pub out: Output,
+    /// Parsed global options.
     pub global: GlobalOptions,
+    /// Environment variable lookups.
     pub env: &'a dyn Environment,
+    /// OS credential store.
     pub store: &'a dyn CredentialStore,
+    /// Global configuration file access.
     pub config: ConfigStore,
+    /// API client construction.
     pub factory: &'a dyn ApiFactory,
+    /// Interactive prompts.
     pub prompt: &'a mut dyn Prompt,
+    /// The process working directory (context discovery root).
     pub cwd: PathBuf,
     /// Exit code used when a command succeeds but wants a non-zero status
     /// (e.g. `doctor` reporting a failed check).
@@ -162,7 +217,7 @@ impl Session<'_> {
     /// Resolves the authentication token (SPEC §25, §34).
     pub fn token_for(&self, selection: &Selection) -> Result<SecretString, CliError> {
         if let Some(token) = self.env.var("HAMSTIK_TOKEN") {
-            return Ok(SecretString::new(token.into()));
+            return crate::input::token_to_secret(&token).map_err(CliError::usage);
         }
         let profile = selection.profile_meta.as_ref().ok_or_else(|| {
             CliError::usage("not authenticated; run `hamstik auth login` or set HAMSTIK_TOKEN")
@@ -227,12 +282,16 @@ fn map_credential_error(err: CredentialError) -> CliError {
     CliError::credential(format!("credential store unavailable: {err}"))
 }
 
+/// The default `User-Agent` for API requests.
 #[must_use]
 pub fn user_agent() -> String {
     format!("hamstik-cli/{}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Runs one parsed command to completion, returning the process exit code.
+///
+/// Validates conflicting global options, assembles the [`Session`], and maps
+/// command errors to exit codes.
 pub async fn run(cli: Cli, services: Services<'_>) -> i32 {
     let Services {
         env,
