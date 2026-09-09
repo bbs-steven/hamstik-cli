@@ -14,8 +14,8 @@ It talks to Hamstik exclusively through the documented **Hamstik Public API v1**
 under `/api/v1`, making the same platform capabilities available to terminals,
 scripts, and agent workflows.
 
-> **Status:** Pre-alpha. The repository currently contains the project foundation
-> and the API contract; end-user CLI workflows are still under development.
+> **Status:** Pre-alpha. The current Public API v1 command surface is implemented,
+> but packaging and the first supported release are still under development.
 
 [![CI](https://github.com/bbs-steven/hamstik-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/bbs-steven/hamstik-cli/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -115,6 +115,8 @@ The Dogfooding Alpha is implemented. Today the CLI provides:
   `hamstik org work` (`--mine` for the authenticated user);
 - user profiles — `hamstik user view|work|activity|avatar` for
   visibility-scoped public data;
+- authenticated identity via `hamstik me`, including credential scopes,
+  expiration, default Organization, and memberships;
 - sprints — `hamstik sprint list|view|create|transitions|transition` with
   completion actions for sprints that still have unfinished work items;
 - labels — `hamstik label list|create` and `hamstik work label add|remove`
@@ -125,7 +127,11 @@ The Dogfooding Alpha is implemented. Today the CLI provides:
   (`work link list|add|delete`), activity (`work activity`), archive/
   unarchive/delete lifecycle, and bulk operations
   (`work bulk create|update|transition`);
+- first-class My Work via `hamstik work mine` (`work my` alias) and
+  Organization-wide SqueakQL search via `hamstik work search` /
+  `hamstik squeakql validate`;
 - attachments — `work attachment list|upload|download|delete`;
+- the unauthenticated live contract via `hamstik api openapi`;
 - automation-friendly output via `--json` / `--quiet` and stable exit codes;
 - shell completions (`hamstik completion <shell>`), connectivity
   diagnostics (`hamstik doctor`) including terminal rendering checks
@@ -134,6 +140,72 @@ The Dogfooding Alpha is implemented. Today the CLI provides:
 
 OAuth, the MCP server, and the Agent Skill remain future work. See the
 [design documents](#design-documents) for where the CLI is headed.
+
+## Command examples
+
+Global `--org`, `--project`, and `--json` options may be placed before or after
+subcommands. Cursors are opaque: pass the returned `nextCursor` unchanged.
+
+```bash
+# Authentication, identity, and context
+hamstik auth login --with-token
+hamstik me --json
+hamstik context init --org acme --project HAM
+
+# Organizations, members, Projects, and Sprints
+hamstik org list --all
+hamstik org members acme --search steven
+hamstik project create --name "Website" --key WEB --color '#3b82f6'
+hamstik project edit WEB --description "Public site"
+hamstik sprint create --name "September" --goal "Ship v1" --target-points 40
+hamstik sprint transitions 11111111-1111-4111-8111-111111111111
+hamstik sprint transition 11111111-1111-4111-8111-111111111111 active
+
+# Structured Work Item filters, Organization Work, and My Work
+hamstik work list --status todo --status in_progress --label-name api \
+  --sprint none --top-level --sort dueDate --fields title,status,dueDate
+hamstik org work --project HAM --priority urgent --overdue true
+hamstik work mine --scope open --project HAM --project WEB --all
+
+# SqueakQL validation and read-only JSON-body search
+hamstik squeakql validate 'status = todo and priority >= high'
+hamstik work search 'status = todo and priority >= high' --limit 100 --json
+
+# Work Item lifecycle and optimistic concurrency
+hamstik work create --title "Document API" --type task --assignee me
+hamstik work edit HAM-42 --priority high --parent HAM-7
+hamstik work transitions HAM-42
+hamstik work transition HAM-42 in_progress
+hamstik work archive HAM-42
+# --force is explicit last-write-wins (If-Match: *); it is never the default.
+hamstik work unarchive HAM-42 --force
+
+# Bulk request files map directly to the Public API operation-array schemas
+hamstik work bulk create --operations-file create-operations.json --json
+hamstik work bulk update --operations-file update-operations.json \
+  --concurrency require-revision --json
+hamstik work bulk transition --operations-file transition-operations.json \
+  --concurrency last-write-wins --json
+
+# Labels, links, threaded comments, and attachments
+hamstik label create --name api --color '#6366f1'
+hamstik work label add HAM-42 --label api
+hamstik work link add HAM-42 --target-key WEB-9 --relation blocks
+hamstik work comment add HAM-42 --body "Ready for review"
+hamstik work comment add HAM-42 --body "Agreed" --parent COMMENT_UUID
+hamstik work attachment upload HAM-42 ./design.png --content-type image/png
+hamstik work attachment download HAM-42 ATTACHMENT_UUID --output ./design.png
+
+# Public user profile resources use immutable usr_ identifiers
+hamstik user view usr_cPbfeqnghA-RLpDVOMQhHg
+hamstik user work usr_cPbfeqnghA-RLpDVOMQhHg --involvement created
+hamstik user activity usr_cPbfeqnghA-RLpDVOMQhHg --since 2026-09-01T00:00:00Z
+hamstik user avatar usr_cPbfeqnghA-RLpDVOMQhHg --format webp --output avatar.webp
+```
+
+Downloads always write binary data to a file. In `--json` mode stdout contains
+only JSON metadata (path, size, content type, and available response headers),
+never the binary payload. Diagnostics and structured failures go to stderr.
 
 ## Credentials, profiles, and logout
 
@@ -216,6 +288,12 @@ Hamstik CLI uses only the public API under `/api/v1`. The checked-in
 snapshot of the Hamstik Public API v1 contract used for CLI development and
 contract testing — see [`openapi/README.md`](openapi/README.md) for how it is
 maintained.
+
+[`openapi/api-parity.json`](openapi/api-parity.json) accounts for every
+`operationId` with its API-client method, CLI command, and test classification.
+The parsed parity test fails on unclassified operations. Developers can run
+`scripts/update-openapi.sh --check` to report live drift or `--update` to
+deliberately refresh the byte-for-byte snapshot; normal builds remain offline.
 
 CLI code must not silently depend on private Hamstik web-app or server
 internals, and contract changes are synchronized intentionally rather than

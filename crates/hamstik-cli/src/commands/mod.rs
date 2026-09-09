@@ -9,20 +9,24 @@ use crate::app::Session;
 use crate::args::Command;
 use crate::error::CliError;
 
+pub mod api;
 pub mod auth;
 pub mod completion;
 pub mod context_cmd;
 pub mod doctor;
 pub mod label;
+pub mod me;
 pub mod org;
 pub mod project;
 pub mod sprint;
+pub mod squeakql;
 pub mod user;
 pub mod work;
 
 /// Runs the selected subcommand against the session.
 pub async fn dispatch(session: &mut Session<'_>, command: &Command) -> Result<(), CliError> {
     match command {
+        Command::Me => me::run(session).await,
         Command::Auth(args) => auth::run(session, args).await,
         Command::Context(args) => context_cmd::run(session, args).await,
         Command::Org(args) => org::run(session, args).await,
@@ -31,6 +35,8 @@ pub async fn dispatch(session: &mut Session<'_>, command: &Command) -> Result<()
         Command::Label(args) => label::run(session, args).await,
         Command::Work(args) => work::run(session, args).await,
         Command::User(args) => user::run(session, args).await,
+        Command::Squeakql(args) => squeakql::run(session, args).await,
+        Command::Api(args) => api::run(session, args).await,
         Command::Doctor => doctor::run(session).await,
         Command::Completion(args) => completion::run(session, args),
         Command::Version => version(session),
@@ -101,8 +107,8 @@ where
 ///
 /// Accepts an existing public ID verbatim or `me`, which is resolved through
 /// `GET /me` (SPEC: writes accept only UUIDs or `usr_` public IDs; `me` is a
-/// CLI-side convenience). Returns `None` only for `none`, which callers use
-/// to clear assignment.
+/// CLI-side convenience). The literal `none` is forwarded for callers that
+/// use it as a clear-assignment sentinel.
 pub(crate) async fn resolve_user_arg(
     session: &Session<'_>,
     value: &str,
@@ -121,9 +127,5 @@ pub(crate) async fn resolve_user_arg(
     let selection = session.selection()?;
     let api = session.api(&selection)?;
     let response = api.whoami().await.map_err(CliError::from_client)?;
-    response
-        .value
-        .public_id
-        .clone()
-        .ok_or_else(|| CliError::protocol("server did not return a public ID for the current user"))
+    Ok(response.value.public_id.clone())
 }

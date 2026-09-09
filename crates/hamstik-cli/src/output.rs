@@ -116,17 +116,21 @@ impl Output {
                 serde_json::to_string_pretty(&error.to_json()).map_err(io::Error::other)?;
             writeln!(self.err, "{rendered}")
         } else {
-            writeln!(self.err, "error: {}", error.message)?;
-            // Verbose human output surfaces the correlation id that JSON mode
-            // always includes, so `--verbose` requests can be matched against
-            // server logs without rerunning with `--json`.
-            if self.verbose {
-                if let Some(request_id) = &error.request_id {
-                    writeln!(self.err, "request id: {request_id}")?;
+            writeln!(self.err, "error [{}]: {}", error.code, error.message)?;
+            for (field, messages) in error.field_errors.iter() {
+                for message in messages {
+                    writeln!(self.err, "  {field}: {message}")?;
                 }
-                if let Some(status) = error.status {
-                    writeln!(self.err, "http status: {status}")?;
-                }
+            }
+            // Correlation ids are always useful and must not require a second
+            // request with --verbose merely to make the failure traceable.
+            if let Some(request_id) = &error.request_id {
+                writeln!(self.err, "request id: {request_id}")?;
+            }
+            if self.verbose
+                && let Some(status) = error.status
+            {
+                writeln!(self.err, "http status: {status}")?;
             }
             Ok(())
         }
@@ -296,6 +300,7 @@ mod tests {
             message: "changed".into(),
             request_id: Some("r1".into()),
             field_errors: Default::default(),
+            details: None,
             retry_after: None,
             rate_limit: None,
         });

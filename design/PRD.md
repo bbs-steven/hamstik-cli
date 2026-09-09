@@ -860,11 +860,15 @@ The CLI should safely retry only operations where doing so is valid.
 Safe automatic retry candidates include:
 
 - GET requests;
-- idempotent POST mutations using the same idempotency key;
+- mutations protected by an idempotency key, reusing that same key;
+- read-only POST requests such as SqueakQL search and validation;
 - HTTP 429 when `Retry-After` is present;
 - selected transient server/network failures.
 
-Normal PATCH updates should not be blindly retried after an ambiguous network failure because they are revision-sensitive and do not currently use the Public API idempotency mechanism.
+A revision-sensitive PATCH that does not use the Public API idempotency
+mechanism must not be retried after an ambiguous network failure. PATCH
+operations that require an idempotency key may be retried only with that same
+key and request body.
 
 ---
 

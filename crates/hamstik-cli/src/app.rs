@@ -31,6 +31,9 @@ use crate::output::{Mode, Output};
 pub trait ApiFactory: Send + Sync {
     /// Builds one client for the resolved request.
     fn build(&self, request: &ClientRequest) -> Result<Arc<dyn HamstikApi>, CliError>;
+
+    /// Builds an unauthenticated client for public contract metadata.
+    fn build_public(&self, request: &PublicClientRequest) -> Result<Arc<dyn HamstikApi>, CliError>;
 }
 
 /// The largest CA bundle accepted (2 MiB) — a handful of PEM certificates plus
@@ -73,26 +76,63 @@ pub struct ClientRequest<'a> {
     pub user_agent: String,
 }
 
+/// Parameters for constructing an unauthenticated Public API client.
+pub struct PublicClientRequest<'a> {
+    /// The validated host origin.
+    pub host: Host,
+    /// Disable automatic retries (`--no-retry`).
+    pub no_retry: bool,
+    /// Additional PEM root certificate bundle path.
+    pub ca_bundle: Option<&'a Path>,
+    /// The `User-Agent` value.
+    pub user_agent: String,
+}
+
 /// Production factory producing real [`HamstikClient`] instances.
 pub struct ProductionApiFactory;
 
 impl ApiFactory for ProductionApiFactory {
     fn build(&self, request: &ClientRequest) -> Result<Arc<dyn HamstikApi>, CliError> {
-        let mut config = ClientConfig {
-            user_agent: request.user_agent.clone(),
-            ..ClientConfig::default()
-        };
-        if request.no_retry {
-            config.retry = hamstik_api_client::RetryPolicy::none();
-        }
-        if let Some(path) = request.ca_bundle {
-            let pem = read_ca_bundle(path)?;
-            config.ca_pem.push(pem);
-        }
+        let config = client_config(
+            request.user_agent.clone(),
+            request.no_retry,
+            request.ca_bundle,
+        )?;
         let client = HamstikClient::new(request.host.clone(), request.token.clone(), config)
             .map_err(CliError::from_client)?;
         Ok(Arc::new(client))
     }
+
+    fn build_public(&self, request: &PublicClientRequest) -> Result<Arc<dyn HamstikApi>, CliError> {
+        let config = client_config(
+            request.user_agent.clone(),
+            request.no_retry,
+            request.ca_bundle,
+        )?;
+        // Keep the same concrete type and configuration as authenticated
+        // clients; only the bearer credential is absent.
+        let client = HamstikClient::new_public(request.host.clone(), config)
+            .map_err(CliError::from_client)?;
+        Ok(Arc::new(client))
+    }
+}
+
+fn client_config(
+    user_agent: String,
+    no_retry: bool,
+    ca_bundle: Option<&Path>,
+) -> Result<ClientConfig, CliError> {
+    let mut config = ClientConfig {
+        user_agent,
+        ..ClientConfig::default()
+    };
+    if no_retry {
+        config.retry = hamstik_api_client::RetryPolicy::none();
+    }
+    if let Some(path) = ca_bundle {
+        config.ca_pem.push(read_ca_bundle(path)?);
+    }
+    Ok(config)
 }
 
 /// External dependencies injected into [`run`].
@@ -258,6 +298,25 @@ impl Session<'_> {
     pub fn api(&self, selection: &Selection) -> Result<Arc<dyn HamstikApi>, CliError> {
         let token = self.token_for(selection)?;
         self.build_client(selection.host.clone(), token)
+    }
+
+    /// Builds an unauthenticated client for the public OpenAPI operation.
+    pub fn public_api(&self, selection: &Selection) -> Result<Arc<dyn HamstikApi>, CliError> {
+        let env_ca_bundle = self
+            .env
+            .var("HAMSTIK_CA_BUNDLE")
+            .map(std::path::PathBuf::from);
+        let ca_bundle = self
+            .global
+            .ca_bundle
+            .as_deref()
+            .or(env_ca_bundle.as_deref());
+        self.factory.build_public(&PublicClientRequest {
+            host: selection.host.clone(),
+            no_retry: self.global.no_retry,
+            ca_bundle,
+            user_agent: user_agent(),
+        })
     }
 
     /// Builds an API client with an explicit token (used by `auth login`).
@@ -441,6 +500,13 @@ mod tests {
 
     impl ApiFactory for NullFactory {
         fn build(&self, _request: &ClientRequest) -> Result<Arc<dyn HamstikApi>, CliError> {
+            Err(CliError::protocol("no api in credential tests"))
+        }
+
+        fn build_public(
+            &self,
+            _request: &PublicClientRequest,
+        ) -> Result<Arc<dyn HamstikApi>, CliError> {
             Err(CliError::protocol("no api in credential tests"))
         }
     }

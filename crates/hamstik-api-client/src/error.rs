@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use serde_json::Value;
 use thiserror::Error;
 
 /// Errors produced while validating or normalizing a configured host.
@@ -54,6 +55,8 @@ pub struct ApiError {
     pub request_id: Option<String>,
     /// Per-field validation messages, keyed by field name.
     pub field_errors: BTreeMap<String, Vec<String>>,
+    /// Operation-specific structured context supplied by the server.
+    pub details: Option<BTreeMap<String, Value>>,
     /// The parsed `Retry-After` header, when the server sent one.
     pub retry_after: Option<Duration>,
     /// The server's rate-limit snapshot from `RateLimit-*` headers, when the

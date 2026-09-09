@@ -4,20 +4,22 @@
 //! `hamstik work` (list / view / create / edit / transitions / transition /
 //! start / close / comment).
 
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use hamstik_api_client::{
-    ActivityOptions, BulkCreateEnvelope, BulkTransitionEnvelope, BulkUpdateEnvelope,
-    CreateCommentRequest, CreateWorkItemLinkRequest, CreateWorkItemRequest, ListOptions,
-    ListWorkItemsQuery, PageItems, TransitionRequest, UpdateCommentRequest, UpdateWorkItemRequest,
-    WorkItem, WorkItemSummary, follow_all, generate_key, validate_key,
+    ActivityOptions, AttachLabelRequest, BulkCreateEnvelope, BulkTransitionEnvelope,
+    BulkUpdateEnvelope, CreateCommentRequest, CreateWorkItemLinkRequest, CreateWorkItemRequest,
+    ListOptions, ListWorkItemsQuery, PageItems, SqueakQlSearchRequest, TransitionRequest,
+    UpdateCommentRequest, UpdateWorkItemRequest, WorkItem, WorkItemSummary, follow_all,
+    generate_key, validate_key,
 };
 
 use crate::app::Session;
 use crate::args::{
-    CommentArgs, CommentCommand, WorkArgs, WorkAttachmentArgs, WorkAttachmentCommand, WorkBulkArgs,
-    WorkBulkCommand, WorkCommand, WorkCreateArgs, WorkEditArgs, WorkLabelArgs, WorkLabelCommand,
-    WorkLinkArgs, WorkLinkCommand, WorkListArgs,
+    CommentArgs, CommentCommand, MyWorkArgs, WorkArgs, WorkAttachmentArgs, WorkAttachmentCommand,
+    WorkBulkArgs, WorkBulkCommand, WorkCommand, WorkCreateArgs, WorkEditArgs, WorkLabelArgs,
+    WorkLabelCommand, WorkLinkArgs, WorkLinkCommand, WorkListArgs,
 };
 use crate::error::CliError;
 use crate::input::resolve_text;
@@ -29,6 +31,8 @@ use super::{emit_json, emit_table, emit_view};
 pub async fn run(session: &mut Session<'_>, args: &WorkArgs) -> Result<(), CliError> {
     match &args.command {
         WorkCommand::List(list_args) => list(session, list_args).await,
+        WorkCommand::Mine(mine_args) => mine(session, mine_args).await,
+        WorkCommand::Search { query, pagination } => search(session, query, pagination).await,
         WorkCommand::View { key } => view(session, key).await,
         WorkCommand::Create(create_args) => create(session, create_args).await,
         WorkCommand::Edit(edit_args) => edit(session, edit_args).await,
@@ -67,6 +71,160 @@ pub async fn run(session: &mut Session<'_>, args: &WorkArgs) -> Result<(), CliEr
     }
 }
 
+fn my_work_query(args: &MyWorkArgs) -> ListWorkItemsQuery {
+    ListWorkItemsQuery {
+        limit: args.pagination.limit,
+        cursor: args.pagination.cursor.clone(),
+        projects: args.project.clone(),
+        status: args
+            .status
+            .iter()
+            .map(|value| value.as_str().to_string())
+            .collect(),
+        scope: args.scope.map(|value| value.as_str().to_string()),
+        item_type: args
+            .item_type
+            .iter()
+            .map(|value| value.as_str().to_string())
+            .collect(),
+        priority: args
+            .priority
+            .iter()
+            .map(|value| value.as_str().to_string())
+            .collect(),
+        label: args.label.clone(),
+        label_name: args.label_name.clone(),
+        overdue: args.overdue,
+        due_before: args.due_before.clone(),
+        due_after: args.due_after.clone(),
+        sort: args.sort.map(|value| value.as_str().to_string()),
+        archived: args.archived,
+        fields: args.fields.clone(),
+        ..Default::default()
+    }
+}
+
+async fn mine(session: &mut Session<'_>, args: &MyWorkArgs) -> Result<(), CliError> {
+    let selection = session.selection()?;
+    let api = session.api(&selection)?;
+    let base = my_work_query(args);
+    let json_value = if args.pagination.all {
+        let fetch_api = api.clone();
+        let page = follow_all(move |cursor| {
+            let fetch_api = fetch_api.clone();
+            let mut query = base.clone();
+            query.cursor = cursor;
+            async move {
+                let response = fetch_api.list_my_work(query).await?;
+                Ok(PageItems::new(
+                    response.value.items,
+                    &response.raw,
+                    response.value.page,
+                ))
+            }
+        })
+        .await
+        .map_err(CliError::from_client)?;
+        json!({ "items": page.raw_items, "page": page.page })
+    } else {
+        api.list_my_work(base)
+            .await
+            .map_err(CliError::from_client)?
+            .raw
+    };
+    render_context_work_items(session, &json_value)
+}
+
+async fn search(
+    session: &mut Session<'_>,
+    query: &str,
+    pagination: &crate::args::PaginationArgs,
+) -> Result<(), CliError> {
+    if query.trim().is_empty() {
+        return Err(CliError::usage("SqueakQL query must not be empty"));
+    }
+    let selection = session.selection()?;
+    let org = session.require_org(&selection)?;
+    let api = session.api(&selection)?;
+    let base = SqueakQlSearchRequest {
+        query: query.to_string(),
+        limit: pagination.limit,
+        cursor: pagination.cursor.clone(),
+    };
+    let json_value = if pagination.all {
+        let fetch_api = api.clone();
+        let org = org.clone();
+        let page = follow_all(move |cursor| {
+            let fetch_api = fetch_api.clone();
+            let org = org.clone();
+            let mut body = base.clone();
+            body.cursor = cursor;
+            async move {
+                let response = fetch_api
+                    .search_organization_work_items_with_squeakql(&org, &body)
+                    .await?;
+                Ok(PageItems::new(
+                    response.value.items,
+                    &response.raw,
+                    response.value.page,
+                ))
+            }
+        })
+        .await
+        .map_err(CliError::from_client)?;
+        json!({ "items": page.raw_items, "page": page.page })
+    } else {
+        api.search_organization_work_items_with_squeakql(&org, &base)
+            .await
+            .map_err(CliError::from_client)?
+            .raw
+    };
+    render_context_work_items(session, &json_value)
+}
+
+fn render_context_work_items(session: &mut Session<'_>, value: &Value) -> Result<(), CliError> {
+    let rows = value
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    vec![
+                        raw_string(item, "key"),
+                        item.get("project")
+                            .and_then(|project| project.get("key"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        raw_string(item, "title"),
+                        raw_string(item, "status"),
+                        item.get("assignee")
+                            .and_then(|assignee| assignee.get("name"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("-")
+                            .to_string(),
+                    ]
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    emit_table(
+        session,
+        value,
+        &["KEY", "PROJECT", "TITLE", "STATUS", "ASSIGNEE"],
+        &rows,
+    )
+}
+
+fn raw_string(value: &Value, field: &str) -> String {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// Applies the shared Work Item filters to a query.
 pub(crate) fn apply_filters(query: &mut ListWorkItemsQuery, filters: &crate::args::WorkFilters) {
     query.q = filters.search.clone();
@@ -91,7 +249,7 @@ pub(crate) fn apply_filters(query: &mut ListWorkItemsQuery, filters: &crate::arg
     query.label = filters.label.clone();
     query.label_name = filters.label_name.clone();
     query.parent = filters.parent.clone();
-    query.top_level = if filters.top_level { Some(true) } else { None };
+    query.top_level = filters.top_level;
     query.updated_after = filters.updated_after.clone();
     query.overdue = filters.overdue;
     query.due_before = filters.due_before.clone();
@@ -199,32 +357,9 @@ fn assignee_fields(value: &Option<String>) -> (Option<String>, Option<String>) {
     }
 }
 
-/// True when `value` parses as a UUID (the wire form for parent/label ids).
+/// True when `value` parses as a UUID (the wire form for label ids).
 fn is_uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok()
-}
-
-/// Resolves a `--parent` argument into the parent's wire form.
-///
-/// The server accepts only a parent UUID on the wire; a Work Item key
-/// (e.g. `HAM-42`) is resolved client-side via the detail read. `none` clears
-/// the parent.
-async fn resolve_parent_arg(
-    session: &Session<'_>,
-    org: &str,
-    project: &str,
-    value: &str,
-) -> Result<String, CliError> {
-    if value.eq_ignore_ascii_case("none") || is_uuid(value) {
-        return Ok(value.to_string());
-    }
-    let selection = session.selection()?;
-    let api = session.api(&selection)?;
-    let response = api
-        .get_work_item(org, project, value)
-        .await
-        .map_err(CliError::from_client)?;
-    Ok(response.value.id)
 }
 
 fn summary_row(item: &WorkItemSummary) -> Vec<String> {
@@ -327,10 +462,6 @@ async fn create(session: &mut Session<'_>, args: &WorkCreateArgs) -> Result<(), 
         None => None,
     };
     let (assignee_id, assignee_public_id) = assignee_fields(&assignee);
-    let parent_id = match &args.parent {
-        Some(value) => Some(resolve_parent_arg(session, &org, &project, value).await?),
-        None => None,
-    };
     let body = CreateWorkItemRequest {
         title,
         description,
@@ -340,7 +471,9 @@ async fn create(session: &mut Session<'_>, args: &WorkCreateArgs) -> Result<(), 
         assignee_id,
         assignee_public_id,
         sprint_id: args.sprint.clone(),
-        parent_id,
+        // The current API accepts the parent identifier as a bounded string;
+        // forward it unchanged and leave lookup/validation to the server.
+        parent_id: args.parent.clone(),
         story_points: args.story_points,
         due_date: args.due_date.clone(),
     };
@@ -405,14 +538,7 @@ async fn edit(session: &mut Session<'_>, args: &WorkEditArgs) -> Result<(), CliE
         assignee_id,
         assignee_public_id,
         sprint_id: tri(args.clear_sprint, args.sprint.clone()),
-        parent_id: match tri(args.clear_parent, args.parent.clone()) {
-            Some(None) => Some(None),
-            Some(Some(value)) => {
-                let resolved = resolve_parent_arg(session, &org, &project, &value).await?;
-                Some(Some(resolved))
-            }
-            None => None,
-        },
+        parent_id: tri(args.clear_parent, args.parent.clone()),
         story_points: tri(args.clear_story_points, args.story_points),
         due_date: tri(args.clear_due_date, args.due_date.clone()),
     };
@@ -577,12 +703,13 @@ async fn label(session: &mut Session<'_>, args: &WorkLabelArgs) -> Result<(), Cl
     let project = session.require_project(&selection)?;
     let api = session.api(&selection)?;
 
-    // The wire form is a label UUID. A name (case-insensitive; labels are
-    // stored lowercase) is resolved client-side through the Project label
-    // list so the CLI accepts either form.
-    let label_id = if is_uuid(label) {
-        label.clone()
-    } else {
+    // Attach accepts either selector directly in the live contract. Detach
+    // remains a label-id path operation, so names are resolved only there.
+    let attach_body = AttachLabelRequest {
+        label_id: is_uuid(label).then(|| label.clone()),
+        label: (!is_uuid(label)).then(|| label.trim().to_lowercase()),
+    };
+    let label_id = if command == "remove" && !is_uuid(label) {
         let name = label.trim().to_lowercase();
         let mut cursor: Option<String> = None;
         let mut resolved: Option<String> = None;
@@ -617,6 +744,8 @@ async fn label(session: &mut Session<'_>, args: &WorkLabelArgs) -> Result<(), Cl
         resolved.ok_or_else(|| {
             CliError::not_found(format!("no label named {label:?} in project {project}"))
         })?
+    } else {
+        label.clone()
     };
 
     let if_match = if force {
@@ -641,7 +770,7 @@ async fn label(session: &mut Session<'_>, args: &WorkLabelArgs) -> Result<(), Cl
 
     let response = match command {
         "add" => api
-            .attach_label(&org, &project, key, &label_id, &if_match, &idempotency)
+            .attach_label(&org, &project, key, &attach_body, &if_match, &idempotency)
             .await
             .map_err(CliError::from_client)?,
         _ => api
@@ -772,6 +901,11 @@ async fn attachment(session: &mut Session<'_>, args: &WorkAttachmentArgs) -> Res
                         "attachmentId": attachment_id,
                         "path": target.display().to_string(),
                         "size": download.bytes.len(),
+                        "fileName": download.file_name,
+                        "contentType": download.content_type,
+                        "contentLength": download.content_length,
+                        "contentDisposition": download.content_disposition,
+                        "requestId": download.request_id,
                     }),
                 )
             } else {
@@ -904,13 +1038,21 @@ async fn comment(session: &mut Session<'_>, args: &CommentArgs) -> Result<(), Cl
                 .map(|c| {
                     let body = c.body.clone().unwrap_or_else(|| "(deleted)".to_string());
                     let preview: String = body.chars().take(60).collect();
-                    vec![c.author.name().to_string(), c.created_at.clone(), preview]
+                    vec![
+                        c.id.clone(),
+                        c.parent_comment_id
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                        c.author.name().to_string(),
+                        c.created_at.clone(),
+                        preview,
+                    ]
                 })
                 .collect();
             emit_table(
                 session,
                 &response.raw,
-                &["AUTHOR", "CREATED", "BODY"],
+                &["ID", "PARENT", "AUTHOR", "CREATED", "BODY"],
                 &rows,
             )
         }
@@ -1094,9 +1236,15 @@ async fn link(session: &mut Session<'_>, args: &WorkLinkArgs) -> Result<(), CliE
             let project = session.require_project(&selection)?;
             let api = session.api(&selection)?;
             let idempotency = idem_key(idempotency_key.clone())?;
-            api.delete_work_item_link(&org, &project, key, link_id, &idempotency)
+            let response = api
+                .delete_work_item_link(&org, &project, key, link_id, &idempotency)
                 .await
                 .map_err(CliError::from_client)?;
+            if response.idempotency_replayed {
+                session
+                    .out
+                    .warn("note: request replayed (idempotent duplicate)");
+            }
             if session.json() {
                 emit_json(session, &json!({ "deleted": true, "linkId": link_id }))
             } else {
@@ -1160,6 +1308,7 @@ async fn list_links(
             request_id: None,
             etag: None,
             idempotency_replayed: false,
+            location: None,
             rate_limit: None,
         })
     } else {
@@ -1357,9 +1506,15 @@ async fn delete(
     };
     let idempotency = idem_key_ref(idempotency_key)?;
 
-    api.delete_work_item(&org, &project, key, cascade, &if_match, &idempotency)
+    let response = api
+        .delete_work_item(&org, &project, key, cascade, &if_match, &idempotency)
         .await
         .map_err(CliError::from_client)?;
+    if response.idempotency_replayed {
+        session
+            .out
+            .warn("note: request replayed (idempotent duplicate)");
+    }
     if session.json() {
         emit_json(
             session,
@@ -1374,7 +1529,7 @@ async fn delete(
 }
 
 /// Reads the bulk operations JSON payload (path or `-` for stdin), capped.
-fn read_operations(path: &str) -> Result<Vec<Value>, CliError> {
+fn read_operations<T: DeserializeOwned>(path: &str) -> Result<Vec<T>, CliError> {
     const MAX_OPERATIONS_BYTES: usize = 1024 * 1024;
     let text = if path == "-" {
         use std::io::Read;
@@ -1394,12 +1549,11 @@ fn read_operations(path: &str) -> Result<Vec<Value>, CliError> {
         std::fs::read_to_string(path)
             .map_err(|err| CliError::usage(format!("cannot read {path}: {err}")))?
     };
-    let value: Value = serde_json::from_str(&text)
-        .map_err(|err| CliError::usage(format!("operations must be a JSON array: {err}")))?;
-    let items = value
-        .as_array()
-        .ok_or_else(|| CliError::usage("operations must be a JSON array"))?
-        .clone();
+    let items: Vec<T> = serde_json::from_str(&text).map_err(|err| {
+        CliError::usage(format!(
+            "operations must match the Public API JSON array schema: {err}"
+        ))
+    })?;
     if items.is_empty() || items.len() > 50 {
         return Err(CliError::usage(
             "bulk requests accept between 1 and 50 operations",
@@ -1431,7 +1585,10 @@ async fn bulk(session: &mut Session<'_>, args: &WorkBulkArgs) -> Result<(), CliE
             ..
         } => {
             let body = BulkUpdateEnvelope {
-                concurrency: concurrency.map(|c| c.as_str().to_string()),
+                concurrency: concurrency
+                    .unwrap_or(crate::args::ConcurrencyArg::RequireRevision)
+                    .as_str()
+                    .to_string(),
                 operations: read_operations(operations_file)?,
             };
             api.bulk_update_work_items(&org, &body, &idempotency)

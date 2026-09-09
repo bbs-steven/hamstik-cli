@@ -15,7 +15,10 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
-use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, IF_MATCH};
+use reqwest::header::{
+    ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, HeaderMap, HeaderName, HeaderValue,
+    IF_MATCH, LOCATION,
+};
 use reqwest::redirect::Policy as RedirectPolicy;
 use reqwest::{Certificate, Client, Method, Response};
 use secrecy::{ExposeSecret, SecretString};
@@ -144,6 +147,8 @@ pub struct ApiResponse<T> {
     pub etag: Option<String>,
     /// True when the server signaled this was an idempotent replay.
     pub idempotency_replayed: bool,
+    /// Resource location returned by a create operation, when present.
+    pub location: Option<String>,
     /// The server's rate-limit snapshot, when the response carried the
     /// documented `RateLimit-*` headers.
     pub rate_limit: Option<RateLimitSnapshot>,
@@ -169,6 +174,12 @@ pub struct DownloadedAttachment {
     pub file_name: Option<String>,
     /// The declared `Content-Type`, when the server sent one.
     pub content_type: Option<String>,
+    /// Raw `Content-Disposition` header, when the server sent one.
+    pub content_disposition: Option<String>,
+    /// Declared response length, when the header was present and valid.
+    pub content_length: Option<u64>,
+    /// Cache policy returned for cacheable binary resources such as avatars.
+    pub cache_control: Option<String>,
     /// Correlation id (`X-Request-Id` header).
     pub request_id: Option<String>,
 }
@@ -216,7 +227,7 @@ impl Default for ClientConfig {
 pub struct HamstikClient {
     http: Client,
     host: Host,
-    token: SecretString,
+    token: Option<SecretString>,
     policy: RetryPolicy,
     sleeper: SharedSleeper,
 }
@@ -227,10 +238,25 @@ impl HamstikClient {
         Self::with_sleeper(host, token, config, Arc::new(TokioSleeper))
     }
 
+    /// Builds a client without a bearer credential for the unauthenticated
+    /// `getOpenApi` operation.
+    pub fn new_public(host: Host, config: ClientConfig) -> Result<Self, ClientError> {
+        Self::build_client(host, None, config, Arc::new(TokioSleeper))
+    }
+
     /// Builds a client with an injected sleeper (tests pass a no-op sleeper).
     pub fn with_sleeper(
         host: Host,
         token: SecretString,
+        config: ClientConfig,
+        sleeper: SharedSleeper,
+    ) -> Result<Self, ClientError> {
+        Self::build_client(host, Some(token), config, sleeper)
+    }
+
+    fn build_client(
+        host: Host,
+        token: Option<SecretString>,
         config: ClientConfig,
         sleeper: SharedSleeper,
     ) -> Result<Self, ClientError> {
@@ -268,9 +294,20 @@ impl HamstikClient {
     where
         T: DeserializeOwned,
     {
+        self.send_json_with_auth(spec, true).await
+    }
+
+    async fn send_json_with_auth<T>(
+        &self,
+        spec: RequestSpec<'_>,
+        authenticated: bool,
+    ) -> Result<ApiResponse<T>, ClientError>
+    where
+        T: DeserializeOwned,
+    {
         let mut attempt = 0u32;
         loop {
-            let request = self.build(&spec)?;
+            let request = self.build(&spec, authenticated)?;
             let response = match request.send().await {
                 Ok(response) => response,
                 Err(err) => {
@@ -354,18 +391,26 @@ impl HamstikClient {
         self.sleeper.sleep(wait).await;
     }
 
-    fn build(&self, spec: &RequestSpec<'_>) -> Result<reqwest::RequestBuilder, ClientError> {
+    fn build(
+        &self,
+        spec: &RequestSpec<'_>,
+        authenticated: bool,
+    ) -> Result<reqwest::RequestBuilder, ClientError> {
         let segments: Vec<&str> = spec.segments.iter().map(String::as_str).collect();
         let url = self.host.resource_url(&segments)?;
 
-        let auth = HeaderValue::from_str(&format!("Bearer {}", self.token.expose_secret()))
-            .map_err(|_| ClientError::Protocol("token contains invalid characters".into()))?;
-
-        let mut builder = self
-            .http
-            .request(spec.method.clone(), url)
-            .header(AUTHORIZATION, auth)
-            .header(ACCEPT, HeaderValue::from_static("application/json"));
+        let mut builder = self.http.request(spec.method.clone(), url);
+        if authenticated {
+            let token = self.token.as_ref().ok_or_else(|| {
+                ClientError::Protocol("this operation requires an authenticated client".into())
+            })?;
+            let auth = HeaderValue::from_str(&format!("Bearer {}", token.expose_secret()))
+                .map_err(|_| ClientError::Protocol("token contains invalid characters".into()))?;
+            builder = builder.header(AUTHORIZATION, auth);
+        }
+        if !spec.headers.iter().any(|(name, _)| name == ACCEPT) {
+            builder = builder.header(ACCEPT, HeaderValue::from_static("application/json"));
+        }
 
         for (name, value) in &spec.headers {
             let header = HeaderValue::from_str(value)
@@ -383,10 +428,10 @@ impl HamstikClient {
     }
 
     /// Sends a request expecting a structured error or `204 No Content`.
-    async fn send_void(&self, spec: RequestSpec<'_>) -> Result<(), ClientError> {
+    async fn send_void(&self, spec: RequestSpec<'_>) -> Result<ApiResponse<()>, ClientError> {
         let mut attempt = 0u32;
         loop {
-            let request = self.build(&spec)?;
+            let request = self.build(&spec, true)?;
             let response = match request.send().await {
                 Ok(response) => response,
                 Err(err) => {
@@ -407,7 +452,7 @@ impl HamstikClient {
             {
                 let status = response.status().as_u16();
                 if (200..300).contains(&status) {
-                    return Ok(());
+                    return self.finalize(response).await;
                 }
                 return Err(self.to_api_error(response).await);
             }
@@ -420,7 +465,7 @@ impl HamstikClient {
     async fn send_bytes(&self, spec: RequestSpec<'_>) -> Result<DownloadedAttachment, ClientError> {
         let mut attempt = 0u32;
         loop {
-            let request = self.build(&spec)?;
+            let request = self.build(&spec, true)?;
             let response = match request.send().await {
                 Ok(response) => response,
                 Err(err) => {
@@ -445,13 +490,16 @@ impl HamstikClient {
                 }
                 let headers = response.headers().clone();
                 let bytes = read_body_capped(response).await?;
+                let content_disposition =
+                    header_str(&headers, &header_content_disposition()).map(str::to_string);
                 return Ok(DownloadedAttachment {
                     bytes: bytes.to_vec(),
-                    file_name: file_name_from_disposition(header_str(
-                        &headers,
-                        &header_content_disposition(),
-                    )),
+                    file_name: file_name_from_disposition(content_disposition.as_deref()),
                     content_type: header_str(&headers, &header_content_type()).map(str::to_string),
+                    content_disposition,
+                    content_length: header_str(&headers, &CONTENT_LENGTH)
+                        .and_then(|value| value.parse().ok()),
+                    cache_control: header_str(&headers, &CACHE_CONTROL).map(str::to_string),
                     request_id: header_str(&headers, &header_request_id())
                         .map(sanitize_server_text)
                         .filter(|id| !id.is_empty()),
@@ -511,14 +559,19 @@ impl HamstikClient {
         let segments: Vec<&str> = spec.segments.iter().map(String::as_str).collect();
         let url = self.host.resource_url(&segments)?;
 
-        let auth = HeaderValue::from_str(&format!("Bearer {}", self.token.expose_secret()))
+        let token = self.token.as_ref().ok_or_else(|| {
+            ClientError::Protocol("this operation requires an authenticated client".into())
+        })?;
+        let auth = HeaderValue::from_str(&format!("Bearer {}", token.expose_secret()))
             .map_err(|_| ClientError::Protocol("token contains invalid characters".into()))?;
 
         let mut builder = self
             .http
             .request(spec.method.clone(), url)
-            .header(AUTHORIZATION, auth)
-            .header(ACCEPT, HeaderValue::from_static("application/json"));
+            .header(AUTHORIZATION, auth);
+        if !spec.headers.iter().any(|(name, _)| name == ACCEPT) {
+            builder = builder.header(ACCEPT, HeaderValue::from_static("application/json"));
+        }
 
         for (name, value) in &spec.headers {
             let header = HeaderValue::from_str(value)
@@ -563,6 +616,7 @@ impl HamstikClient {
                 request_id,
                 etag,
                 idempotency_replayed,
+                location: header_str(&headers, &LOCATION).map(str::to_string),
                 rate_limit: rate_limit_snapshot(&headers),
             })
         } else {
@@ -603,6 +657,7 @@ impl HamstikClient {
             message,
             request_id: extract_request_id(raw, headers),
             field_errors: parse_field_errors(error.and_then(|e| e.get("fieldErrors"))),
+            details: parse_details(error.and_then(|e| e.get("details"))),
             retry_after,
             rate_limit: rate_limit_snapshot(headers),
         })
@@ -698,6 +753,15 @@ fn parse_field_errors(value: Option<&Value>) -> BTreeMap<String, Vec<String>> {
     map
 }
 
+fn parse_details(value: Option<&Value>) -> Option<BTreeMap<String, Value>> {
+    value.and_then(Value::as_object).map(|object| {
+        object
+            .iter()
+            .map(|(key, value)| (sanitize_server_text(key), value.clone()))
+            .collect()
+    })
+}
+
 fn default_code_for_status(status: u16) -> &'static str {
     match status {
         400 => "VALIDATION_ERROR",
@@ -778,12 +842,7 @@ fn work_item_query(q: &ListWorkItemsQuery) -> Vec<(String, String)> {
     push_repeated(&mut out, "label", &q.label);
     push_repeated(&mut out, "labelName", &q.label_name);
     push_scalar(&mut out, "parent", &q.parent);
-    if let Some(top_level) = q.top_level {
-        out.push((
-            "topLevel".to_string(),
-            if top_level { "1" } else { "0" }.to_string(),
-        ));
-    }
+    push_bool(&mut out, "topLevel", q.top_level);
     push_scalar(&mut out, "updatedAfter", &q.updated_after);
     push_repeated(&mut out, "project", &q.projects);
     push_repeated(&mut out, "organization", &q.organizations);
@@ -835,6 +894,8 @@ fn activity_query(opts: &ActivityOptions) -> Vec<(String, String)> {
 pub trait HamstikApi: Send + Sync {
     /// `GET /me`: the authenticated identity and credential context.
     async fn whoami(&self) -> Result<ApiResponse<Me>, ClientError>;
+    /// `GET /openapi.json`: the unauthenticated Public API contract.
+    async fn get_open_api(&self) -> Result<ApiResponse<Value>, ClientError>;
     /// `GET /organizations`: the organizations the user belongs to.
     async fn list_organizations(
         &self,
@@ -930,7 +991,7 @@ pub trait HamstikApi: Send + Sync {
         project_key: &str,
         key: &str,
         comment_id: &str,
-    ) -> Result<(), ClientError>;
+    ) -> Result<ApiResponse<()>, ClientError>;
     /// `POST .../projects`: create a Project (Organization administrators,
     /// idempotent).
     async fn create_project(
@@ -1001,7 +1062,7 @@ pub trait HamstikApi: Send + Sync {
         org_slug: &str,
         project_key: &str,
         key: &str,
-        label_id: &str,
+        body: &AttachLabelRequest,
         if_match: &str,
         idempotency_key: &str,
     ) -> Result<ApiResponse<WorkItem>, ClientError>;
@@ -1052,7 +1113,7 @@ pub trait HamstikApi: Send + Sync {
         project_key: &str,
         key: &str,
         attachment_id: &str,
-    ) -> Result<(), ClientError>;
+    ) -> Result<ApiResponse<()>, ClientError>;
     /// `GET /organizations/{slug}/users`: the member directory
     /// (`organization:members:read`).
     async fn list_organization_users(
@@ -1067,6 +1128,20 @@ pub trait HamstikApi: Send + Sync {
         org_slug: &str,
         query: ListWorkItemsQuery,
     ) -> Result<ApiResponse<WorkItemContextList>, ClientError>;
+    /// Read-only `POST /organizations/{slug}/work-items/search`: execute a
+    /// SqueakQL expression. This operation never sends an idempotency key.
+    async fn search_organization_work_items_with_squeakql(
+        &self,
+        org_slug: &str,
+        body: &SqueakQlSearchRequest,
+    ) -> Result<ApiResponse<WorkItemContextList>, ClientError>;
+    /// Read-only `POST /organizations/{slug}/squeakql/validate`: validate a
+    /// SqueakQL expression without executing it or sending an idempotency key.
+    async fn validate_squeakql(
+        &self,
+        org_slug: &str,
+        body: &SqueakQlValidateRequest,
+    ) -> Result<ApiResponse<SqueakQlValidationResponse>, ClientError>;
     /// `GET /my/work`: Work Items assigned to the PAT owner.
     async fn list_my_work(
         &self,
@@ -1094,6 +1169,7 @@ pub trait HamstikApi: Send + Sync {
     async fn get_user_profile_avatar(
         &self,
         public_id: &str,
+        opts: AvatarOptions,
     ) -> Result<DownloadedAttachment, ClientError>;
     /// `PATCH .../projects/{key}`: update a Project (Organization
     /// administrators, `If-Match`, idempotent).
@@ -1148,7 +1224,7 @@ pub trait HamstikApi: Send + Sync {
         key: &str,
         link_id: &str,
         idempotency_key: &str,
-    ) -> Result<(), ClientError>;
+    ) -> Result<ApiResponse<()>, ClientError>;
     /// `GET .../work-items/{key}/activity`: chronological (oldest-first)
     /// Work Item activity.
     async fn list_work_item_activity(
@@ -1176,7 +1252,7 @@ pub trait HamstikApi: Send + Sync {
         cascade: bool,
         if_match: &str,
         idempotency_key: &str,
-    ) -> Result<(), ClientError>;
+    ) -> Result<ApiResponse<()>, ClientError>;
     /// `POST .../work-items/{key}/archive`: archive a Work Item (idempotent,
     /// `If-Match`, empty `{}` body).
     async fn archive_work_item(
@@ -1243,6 +1319,21 @@ impl HamstikApi for HamstikClient {
             body: None,
             retryable: true,
         })
+        .await
+    }
+
+    async fn get_open_api(&self) -> Result<ApiResponse<Value>, ClientError> {
+        self.send_json_with_auth(
+            RequestSpec {
+                method: Method::GET,
+                segments: vec!["openapi.json".to_string()],
+                query: Vec::new(),
+                headers: Vec::new(),
+                body: None,
+                retryable: true,
+            },
+            false,
+        )
         .await
     }
 
@@ -1424,7 +1515,7 @@ impl HamstikApi for HamstikClient {
             query: Vec::new(),
             headers: vec![(IF_MATCH.clone(), if_match.to_string())],
             body: Some(&payload),
-            // PATCH is never auto-retried.
+            // This revision-sensitive PATCH has no idempotency mechanism.
             retryable: false,
         })
         .await
@@ -1551,7 +1642,7 @@ impl HamstikApi for HamstikClient {
         project_key: &str,
         key: &str,
         comment_id: &str,
-    ) -> Result<(), ClientError> {
+    ) -> Result<ApiResponse<()>, ClientError> {
         self.send_void(RequestSpec {
             method: Method::DELETE,
             segments: vec![
@@ -1784,11 +1875,12 @@ impl HamstikApi for HamstikClient {
         org_slug: &str,
         project_key: &str,
         key: &str,
-        label_id: &str,
+        body: &AttachLabelRequest,
         if_match: &str,
         idempotency_key: &str,
     ) -> Result<ApiResponse<WorkItem>, ClientError> {
-        let payload = serde_json::json!({ "labelId": label_id });
+        let payload = serde_json::to_value(body)
+            .map_err(|err| ClientError::Protocol(format!("invalid request body: {err}")))?;
         self.send_json(RequestSpec {
             method: Method::POST,
             segments: vec![
@@ -1924,7 +2016,10 @@ impl HamstikApi for HamstikClient {
                 attachment_id.to_string(),
             ],
             query: Vec::new(),
-            headers: Vec::new(),
+            headers: vec![(
+                ACCEPT,
+                "application/octet-stream, application/json".to_string(),
+            )],
             body: None,
             retryable: true,
         })
@@ -1937,7 +2032,7 @@ impl HamstikApi for HamstikClient {
         project_key: &str,
         key: &str,
         attachment_id: &str,
-    ) -> Result<(), ClientError> {
+    ) -> Result<ApiResponse<()>, ClientError> {
         self.send_void(RequestSpec {
             method: Method::DELETE,
             segments: vec![
@@ -1993,6 +2088,54 @@ impl HamstikApi for HamstikClient {
             query: work_item_query(&query),
             headers: Vec::new(),
             body: None,
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn search_organization_work_items_with_squeakql(
+        &self,
+        org_slug: &str,
+        body: &SqueakQlSearchRequest,
+    ) -> Result<ApiResponse<WorkItemContextList>, ClientError> {
+        let payload = serde_json::to_value(body)
+            .map_err(|err| ClientError::Protocol(format!("invalid request body: {err}")))?;
+        self.send_json(RequestSpec {
+            method: Method::POST,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "work-items".to_string(),
+                "search".to_string(),
+            ],
+            query: Vec::new(),
+            headers: Vec::new(),
+            body: Some(&payload),
+            // This POST is a read-only operation and has no idempotency key.
+            retryable: true,
+        })
+        .await
+    }
+
+    async fn validate_squeakql(
+        &self,
+        org_slug: &str,
+        body: &SqueakQlValidateRequest,
+    ) -> Result<ApiResponse<SqueakQlValidationResponse>, ClientError> {
+        let payload = serde_json::to_value(body)
+            .map_err(|err| ClientError::Protocol(format!("invalid request body: {err}")))?;
+        self.send_json(RequestSpec {
+            method: Method::POST,
+            segments: vec![
+                "organizations".to_string(),
+                org_slug.to_string(),
+                "squeakql".to_string(),
+                "validate".to_string(),
+            ],
+            query: Vec::new(),
+            headers: Vec::new(),
+            body: Some(&payload),
+            // Validation is read-only despite using POST.
             retryable: true,
         })
         .await
@@ -2071,7 +2214,12 @@ impl HamstikApi for HamstikClient {
     async fn get_user_profile_avatar(
         &self,
         public_id: &str,
+        opts: AvatarOptions,
     ) -> Result<DownloadedAttachment, ClientError> {
+        let mut query = Vec::new();
+        push_scalar(&mut query, "v", &opts.version);
+        push_scalar(&mut query, "format", &opts.format);
+        push_scalar(&mut query, "rev", &opts.revision);
         self.send_bytes(RequestSpec {
             method: Method::GET,
             segments: vec![
@@ -2079,8 +2227,11 @@ impl HamstikApi for HamstikClient {
                 public_id.to_string(),
                 "avatar".to_string(),
             ],
-            query: Vec::new(),
-            headers: Vec::new(),
+            query,
+            headers: vec![(
+                ACCEPT,
+                "image/jpeg, image/png, image/webp, application/json".to_string(),
+            )],
             body: None,
             retryable: true,
         })
@@ -2111,8 +2262,8 @@ impl HamstikApi for HamstikClient {
                 (header_idempotency_key(), idempotency_key.to_string()),
             ],
             body: Some(&payload),
-            // PATCH is never auto-retried.
-            retryable: false,
+            // The required idempotency key makes an ambiguous replay safe.
+            retryable: true,
         })
         .await
     }
@@ -2235,7 +2386,7 @@ impl HamstikApi for HamstikClient {
         key: &str,
         link_id: &str,
         idempotency_key: &str,
-    ) -> Result<(), ClientError> {
+    ) -> Result<ApiResponse<()>, ClientError> {
         self.send_void(RequestSpec {
             method: Method::DELETE,
             segments: vec![
@@ -2313,7 +2464,7 @@ impl HamstikApi for HamstikClient {
         cascade: bool,
         if_match: &str,
         idempotency_key: &str,
-    ) -> Result<(), ClientError> {
+    ) -> Result<ApiResponse<()>, ClientError> {
         // The strict body is `{ "cascade": false }`; omitting the body has the
         // same meaning, so we always send the explicit object.
         let payload = serde_json::json!({ "cascade": cascade });
@@ -2424,8 +2575,8 @@ impl HamstikApi for HamstikClient {
             query: Vec::new(),
             headers: vec![(header_idempotency_key(), idempotency_key.to_string())],
             body: Some(&payload),
-            // PATCH is never auto-retried.
-            retryable: false,
+            // The required idempotency key is reused across retries.
+            retryable: true,
         })
         .await
     }
@@ -2471,8 +2622,8 @@ impl HamstikApi for HamstikClient {
             query: Vec::new(),
             headers: vec![(header_idempotency_key(), idempotency_key.to_string())],
             body: Some(&payload),
-            // PATCH is never auto-retried.
-            retryable: false,
+            // The required idempotency key is reused across retries.
+            retryable: true,
         })
         .await
     }
@@ -2501,7 +2652,6 @@ impl HamstikApi for HamstikClient {
     }
 }
 
-#[cfg(test)]
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

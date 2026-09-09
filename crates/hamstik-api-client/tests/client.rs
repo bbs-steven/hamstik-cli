@@ -12,9 +12,11 @@ use std::time::Duration;
 
 use hamstik_api_client::retry::NoopSleeper;
 use hamstik_api_client::{
-    ClientConfig, CreateCommentRequest, CreateWorkItemRequest, HamstikApi, HamstikClient,
-    ListOptions, ListProjectsOptions, PageItems, RetryPolicy, TransitionRequest,
-    UpdateWorkItemRequest, follow_all,
+    AttachLabelRequest, AvatarOptions, BulkCreateWorkItemOperation,
+    BulkTransitionWorkItemOperation, BulkUpdateWorkItemOperation, ClientConfig,
+    CreateCommentRequest, CreateWorkItemRequest, HamstikApi, HamstikClient, ListOptions,
+    ListProjectsOptions, PageItems, RetryPolicy, TransitionRequest, UpdateWorkItemRequest,
+    follow_all,
 };
 use secrecy::SecretString;
 use serde_json::json;
@@ -51,10 +53,12 @@ async fn sends_auth_and_accept_and_captures_request_id() {
                 .insert_header("X-Request-Id", "req-123")
                 .set_body_json(json!({
                     "id": "1",
+                    "publicId": "usr_cPbfeqnghA-RLpDVOMQhHg",
                     "name": "Steven",
                     "email": "s@example.com",
                     "authentication": {"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
-                    "defaultOrganization": null
+                    "defaultOrganization": null,
+                    "organizations": []
                 })),
         )
         .mount(&server)
@@ -82,12 +86,122 @@ async fn sends_auth_and_accept_and_captures_request_id() {
 }
 
 #[tokio::test]
+async fn openapi_uses_the_public_client_without_authorization() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/openapi.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "openapi": "3.1.1",
+            "paths": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let host = hamstik_api_client::Host::parse(&server.uri()).unwrap();
+    let client = HamstikClient::new_public(host, ClientConfig::default()).unwrap();
+    let response = client.get_open_api().await.unwrap();
+    assert_eq!(response.value["openapi"], "3.1.1");
+
+    let request = &server.received_requests().await.unwrap()[0];
+    assert!(!request.headers.contains_key("authorization"));
+    assert_eq!(
+        request.headers.get("accept").unwrap().to_str().unwrap(),
+        "application/json"
+    );
+}
+
+#[tokio::test]
+async fn squeakql_posts_only_the_documented_json_without_idempotency() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/work-items/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [],
+            "page": {"limit": 25, "hasMore": false, "nextCursor": null}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/squeakql/validate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "valid": false,
+            "languageVersion": 1,
+            "errors": [{
+                "code": "SQUEAKQL_UNKNOWN_FIELD",
+                "message": "Unknown field",
+                "line": 1,
+                "column": 1,
+                "token": "statuz",
+                "suggestion": "status"
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let search = client
+        .search_organization_work_items_with_squeakql(
+            "acme",
+            &hamstik_api_client::SqueakQlSearchRequest {
+                query: "status = todo".into(),
+                limit: Some(25),
+                cursor: Some("opaque+/cursor==".into()),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(search.value.items.is_empty());
+    let validation = client
+        .validate_squeakql(
+            "acme",
+            &hamstik_api_client::SqueakQlValidateRequest {
+                query: "statuz = todo".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!validation.value.valid);
+    assert_eq!(
+        validation.value.errors[0].code.as_str(),
+        "SQUEAKQL_UNKNOWN_FIELD"
+    );
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert!(request.url.query().is_none());
+        assert!(!request.headers.contains_key("idempotency-key"));
+        assert!(
+            request
+                .headers
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("application/json")
+        );
+    }
+    let search_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(search_body["query"], "status = todo");
+    assert_eq!(search_body["limit"], 25);
+    assert_eq!(search_body["cursor"], "opaque+/cursor==");
+    assert_eq!(search_body.as_object().unwrap().len(), 3);
+    let validation_body: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(validation_body, json!({"query": "statuz = todo"}));
+}
+
+#[tokio::test]
 async fn maps_error_envelope_to_api_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/organizations/acme"))
         .respond_with(ResponseTemplate::new(404).set_body_json(json!({
-            "error": {"code": "NOT_FOUND", "message": "no such organization"},
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "no such organization",
+                "fieldErrors": {"organizationSlug": ["does not exist"]},
+                "details": {"organizationSlug": "acme", "retryable": false}
+            },
             "requestId": "err-req"
         })))
         .mount(&server)
@@ -100,6 +214,8 @@ async fn maps_error_envelope_to_api_error() {
     assert_eq!(api.code, "NOT_FOUND");
     assert_eq!(api.message, "no such organization");
     assert_eq!(api.request_id.as_deref(), Some("err-req"));
+    assert_eq!(api.field_errors["organizationSlug"], ["does not exist"]);
+    assert_eq!(api.details.as_ref().unwrap()["organizationSlug"], "acme");
 }
 
 #[tokio::test]
@@ -107,9 +223,11 @@ async fn retries_transient_failure_then_succeeds() {
     let server = MockServer::start().await;
     let count = Arc::new(AtomicUsize::new(0));
     let body = json!({
-        "id": "1", "name": "Steven", "email": "s@example.com",
+        "id": "1", "publicId": "usr_cPbfeqnghA-RLpDVOMQhHg",
+        "name": "Steven", "email": "s@example.com",
         "authentication": {"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
-        "defaultOrganization": null
+        "defaultOrganization": null,
+        "organizations": []
     });
     Mock::given(method("GET"))
         .and(path("/api/v1/me"))
@@ -152,6 +270,71 @@ async fn does_not_retry_patch() {
     assert_eq!(err.as_api().unwrap().status, 503);
     // PATCH must be attempted exactly once.
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn concurrency_errors_preserve_precondition_metadata() {
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1",
+        ))
+        .respond_with(
+            ResponseTemplate::new(412)
+                .insert_header("X-Request-Id", "header-request")
+                .set_body_json(json!({
+                    "error": {
+                        "code": "REVISION_CONFLICT",
+                        "message": "revision changed",
+                        "details": {"expectedRevision": 3, "currentRevision": 4}
+                    },
+                    "requestId": "body-request"
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    let error = client
+        .update_work_item(
+            "acme",
+            "HAM",
+            "HAM-1",
+            &UpdateWorkItemRequest {
+                title: Some("Changed".into()),
+                ..Default::default()
+            },
+            "\"wi-3\"",
+        )
+        .await
+        .unwrap_err();
+    let api = error.as_api().unwrap();
+    assert_eq!(api.status, 412);
+    assert_eq!(api.code, "REVISION_CONFLICT");
+    assert_eq!(api.request_id.as_deref(), Some("body-request"));
+    assert_eq!(api.details.as_ref().unwrap()["currentRevision"], 4);
+    let request = &server.received_requests().await.unwrap()[0];
+    assert_eq!(
+        request.headers.get("if-match").unwrap().to_str().unwrap(),
+        "\"wi-3\""
+    );
+}
+
+#[tokio::test]
+async fn bearer_token_is_not_exposed_in_client_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {"code": "INVALID_TOKEN", "message": "invalid credential"},
+            "requestId": "auth-request"
+        })))
+        .mount(&server)
+        .await;
+
+    let error = client_for(&server.uri()).whoami().await.unwrap_err();
+    assert!(!error.to_string().contains("test-token"));
+    assert!(!format!("{error:?}").contains("test-token"));
 }
 
 #[tokio::test]
@@ -279,7 +462,8 @@ async fn creates_comment_with_idempotency_key() {
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "id":"c1","workItemId":"w1","parentCommentId":null,
             "author":{"id":"u","name":"U"},"body":"hello","deleted":false,
-            "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"
+            "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
+            "editedAt":null
         })))
         .mount(&server)
         .await;
@@ -384,7 +568,7 @@ fn work_item_json() -> serde_json::Value {
         "id":"1","key":"HAM-1","projectId":"2","title":"T","description":null,
         "type":"task","status":"todo","priority":"low","assignee":null,"reporter":null,
         "sprint":null,"parent":null,"labels":[],
-        "storyPoints":null,"dueDate":null,
+        "storyPoints":null,"dueDate":null,"archivedAt":null,
         "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","revision":4
     })
 }
@@ -678,7 +862,17 @@ async fn labels_list_create_and_attach_detach() {
         .unwrap();
 
     let attached = client
-        .attach_label("acme", "HAM", "HAM-1", "l1", "\"wi-4\"", "attach-key-01")
+        .attach_label(
+            "acme",
+            "HAM",
+            "HAM-1",
+            &AttachLabelRequest {
+                label_id: Some("l1".into()),
+                label: None,
+            },
+            "\"wi-4\"",
+            "attach-key-01",
+        )
         .await
         .unwrap();
     assert_eq!(attached.etag.as_deref(), Some("\"wi-5\""));
@@ -753,7 +947,11 @@ async fn uploads_attachment_as_multipart_with_idempotency() {
         .and(path(
             "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/attachments",
         ))
-        .respond_with(ResponseTemplate::new(201).set_body_json(attachment_json()))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("Location", "/api/v1/attachments/a1")
+                .set_body_json(attachment_json()),
+        )
         .mount(&server)
         .await;
 
@@ -773,6 +971,7 @@ async fn uploads_attachment_as_multipart_with_idempotency() {
         .await
         .unwrap();
     assert_eq!(resp.value.file_name, "design.png");
+    assert_eq!(resp.location.as_deref(), Some("/api/v1/attachments/a1"));
 
     let req = &server.received_requests().await.unwrap()[0];
     let content_type = req.headers.get("content-type").unwrap().to_str().unwrap();
@@ -890,10 +1089,7 @@ async fn me_exposes_public_id_and_memberships() {
 
     let client = client_for(&server.uri());
     let me = client.whoami().await.unwrap();
-    assert_eq!(
-        me.value.public_id.as_deref(),
-        Some("usr_cPbfeqnghA-RLpDVOMQhHg")
-    );
+    assert_eq!(me.value.public_id, "usr_cPbfeqnghA-RLpDVOMQhHg");
     assert_eq!(me.value.organizations[0].username.as_deref(), Some("n"));
 }
 
@@ -1000,6 +1196,74 @@ async fn lists_profile_work_with_reporter() {
 }
 
 #[tokio::test]
+async fn profile_work_serializes_repeated_filters_booleans_fields_and_opaque_cursor() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users/usr_cPbfeqnghA-RLpDVOMQhHg/work"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [],
+            "page": {"limit": 17, "hasMore": false, "nextCursor": null}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    client
+        .list_user_profile_work(
+            "usr_cPbfeqnghA-RLpDVOMQhHg",
+            hamstik_api_client::ListWorkItemsQuery {
+                limit: Some(17),
+                cursor: Some("opaque+/cursor==".into()),
+                q: Some("launch plan".into()),
+                status: vec!["todo".into(), "in_progress".into()],
+                scope: Some("open".into()),
+                item_type: vec!["task".into(), "bug".into()],
+                priority: vec!["high".into(), "urgent".into()],
+                sprint: Some("none".into()),
+                label: vec!["label-1".into(), "label-2".into()],
+                label_name: vec!["api".into(), "frontend".into()],
+                parent: Some("HAM-1".into()),
+                top_level: Some(true),
+                updated_after: Some("2026-09-01T00:00:00Z".into()),
+                projects: vec!["HAM".into(), "WEB".into()],
+                organizations: vec!["acme".into(), "labs".into()],
+                involvement: vec!["assigned".into(), "commented".into()],
+                overdue: Some(false),
+                due_before: Some("2026-10-01T00:00:00Z".into()),
+                due_after: Some("2026-09-01T00:00:00Z".into()),
+                sort: Some("dueDate".into()),
+                archived: Some(true),
+                fields: Some("title,status,dueDate".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let request = &server.received_requests().await.unwrap()[0];
+    let pairs: Vec<(String, String)> = request
+        .url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    assert_eq!(pairs.iter().filter(|(key, _)| key == "status").count(), 2);
+    assert_eq!(pairs.iter().filter(|(key, _)| key == "type").count(), 2);
+    assert_eq!(pairs.iter().filter(|(key, _)| key == "label").count(), 2);
+    assert_eq!(
+        pairs
+            .iter()
+            .filter(|(key, _)| key == "organization")
+            .count(),
+        2
+    );
+    assert!(pairs.contains(&("topLevel".into(), "true".into())));
+    assert!(pairs.contains(&("overdue".into(), "false".into())));
+    assert!(pairs.contains(&("archived".into(), "true".into())));
+    assert!(pairs.contains(&("cursor".into(), "opaque+/cursor==".into())));
+    assert!(pairs.contains(&("fields".into(), "title,status,dueDate".into())));
+}
+
+#[tokio::test]
 async fn reads_user_profile() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -1030,6 +1294,8 @@ async fn downloads_avatar_bytes() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("Content-Type", "image/png")
+                .insert_header("Cache-Control", "public, max-age=3600")
+                .insert_header("X-Request-Id", "avatar-request")
                 .set_body_bytes(vec![9, 9, 9]),
         )
         .mount(&server)
@@ -1037,11 +1303,40 @@ async fn downloads_avatar_bytes() {
 
     let client = client_for(&server.uri());
     let avatar = client
-        .get_user_profile_avatar("usr_cPbfeqnghA-RLpDVOMQhHg")
+        .get_user_profile_avatar(
+            "usr_cPbfeqnghA-RLpDVOMQhHg",
+            AvatarOptions {
+                version: Some("v2".into()),
+                format: Some("webp".into()),
+                revision: Some("opaque-rev".into()),
+            },
+        )
         .await
         .unwrap();
     assert_eq!(avatar.bytes, vec![9, 9, 9]);
     assert_eq!(avatar.content_type.as_deref(), Some("image/png"));
+    assert_eq!(
+        avatar.cache_control.as_deref(),
+        Some("public, max-age=3600")
+    );
+    assert_eq!(avatar.request_id.as_deref(), Some("avatar-request"));
+    let request = &server.received_requests().await.unwrap()[0];
+    let pairs: Vec<_> = request.url.query_pairs().collect();
+    assert!(pairs.iter().any(|pair| pair == &("v".into(), "v2".into())));
+    assert!(
+        pairs
+            .iter()
+            .any(|pair| pair == &("format".into(), "webp".into()))
+    );
+    assert!(
+        pairs
+            .iter()
+            .any(|pair| pair == &("rev".into(), "opaque-rev".into()))
+    );
+    assert_eq!(
+        request.headers.get("accept").unwrap().to_str().unwrap(),
+        "image/jpeg, image/png, image/webp, application/json"
+    );
 }
 
 #[tokio::test]
@@ -1332,12 +1627,66 @@ async fn comment_edit_sends_body_and_idempotency() {
 }
 
 #[tokio::test]
+async fn idempotent_patch_retry_reuses_the_same_key_and_body() {
+    let server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("PATCH"))
+        .and(path(
+            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1/comments/c1",
+        ))
+        .respond_with(move |_: &Request| {
+            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(503)
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "id":"c1","workItemId":"w1","parentCommentId":null,
+                    "author":{"id":"u","name":"U"},"body":"edited","deleted":false,
+                    "createdAt":"2026-01-01T00:00:00Z",
+                    "updatedAt":"2026-01-02T00:00:00Z","editedAt":"2026-01-02T00:00:00Z"
+                }))
+            }
+        })
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    client
+        .update_comment(
+            "acme",
+            "HAM",
+            "HAM-1",
+            "c1",
+            &hamstik_api_client::UpdateCommentRequest {
+                body: "edited".into(),
+            },
+            "same-patch-key",
+        )
+        .await
+        .unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].body, requests[1].body);
+    for request in &requests {
+        assert_eq!(
+            request
+                .headers
+                .get("idempotency-key")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "same-patch-key"
+        );
+    }
+}
+
+#[tokio::test]
 async fn bulk_routes_send_envelopes_and_parse_results() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/v1/organizations/acme/bulk-work-items"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results":[{"index":0,"status":201,"workItem":{"id":"1","key":"HAM-1"}}]
+            "results":[{"index":0,"status":201,"workItem":work_item_public_json("todo", 1)}]
         })))
         .mount(&server)
         .await;
@@ -1361,7 +1710,10 @@ async fn bulk_routes_send_envelopes_and_parse_results() {
         .bulk_create_work_items(
             "acme",
             &hamstik_api_client::BulkCreateEnvelope {
-                operations: vec![json!({"projectKey":"HAM","title":"First"})],
+                operations: vec![BulkCreateWorkItemOperation {
+                    project_key: "HAM".into(),
+                    title: "First".into(),
+                }],
             },
             "bulk-create-01",
         )
@@ -1373,10 +1725,16 @@ async fn bulk_routes_send_envelopes_and_parse_results() {
         .bulk_update_work_items(
             "acme",
             &hamstik_api_client::BulkUpdateEnvelope {
-                concurrency: Some("last-write-wins".into()),
-                operations: vec![
-                    json!({"projectKey":"HAM","workItemKey":"HAM-1","changes":{"priority":"high"}}),
-                ],
+                concurrency: "last-write-wins".into(),
+                operations: vec![BulkUpdateWorkItemOperation {
+                    project_key: "HAM".into(),
+                    work_item_key: "HAM-1".into(),
+                    revision: None,
+                    changes: UpdateWorkItemRequest {
+                        priority: Some("high".into()),
+                        ..Default::default()
+                    },
+                }],
             },
             "bulk-update-01",
         )
@@ -1389,9 +1747,12 @@ async fn bulk_routes_send_envelopes_and_parse_results() {
             "acme",
             &hamstik_api_client::BulkTransitionEnvelope {
                 concurrency: None,
-                operations: vec![
-                    json!({"projectKey":"HAM","workItemKey":"HAM-1","targetStatus":"done"}),
-                ],
+                operations: vec![BulkTransitionWorkItemOperation {
+                    project_key: "HAM".into(),
+                    work_item_key: "HAM-1".into(),
+                    revision: Some(1),
+                    target_status: "done".into(),
+                }],
             },
             "bulk-transition-01",
         )

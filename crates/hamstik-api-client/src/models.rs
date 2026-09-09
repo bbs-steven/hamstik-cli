@@ -13,10 +13,18 @@
 //! `{publicId, name}` projection used by newer mutation responses — so they are
 //! decoded into one tolerant [`UserSummary`] enum.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::pagination::Page;
+
+fn deserialize_required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
 
 /// A paginated list query for endpoints that only take `limit`/`cursor`.
 #[derive(Debug, Clone, Default)]
@@ -58,6 +66,20 @@ pub struct ActivityOptions {
     pub cursor: Option<String>,
     /// Only events strictly after this RFC 3339 timestamp.
     pub since: Option<String>,
+}
+
+/// Query options for a profile avatar request.
+///
+/// The three values are opaque cache/format selectors defined by the Public
+/// API. The client forwards them unchanged and never interprets them.
+#[derive(Debug, Clone, Default)]
+pub struct AvatarOptions {
+    /// Opaque avatar version selector.
+    pub version: Option<String>,
+    /// Opaque requested format selector.
+    pub format: Option<String>,
+    /// Opaque avatar revision selector.
+    pub revision: Option<String>,
 }
 
 /// Filters accepted by the Work Item collections (`.../work-items`,
@@ -124,8 +146,7 @@ pub struct Me {
     /// The user's legacy internal id (retained for v1 compatibility).
     pub id: String,
     /// The user's immutable public identifier (e.g. `usr_...`).
-    #[serde(default)]
-    pub public_id: Option<String>,
+    pub public_id: String,
     /// The user's display name.
     pub name: String,
     /// The user's email address (private; only in the caller's own `/me`).
@@ -133,10 +154,10 @@ pub struct Me {
     /// How the request was authenticated.
     pub authentication: AuthenticationContext,
     /// The user's default organization, when one is set.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub default_organization: Option<OrganizationSummary>,
     /// The Organizations available through the credential, each with the
     /// Organization-scoped username.
-    #[serde(default)]
     pub organizations: Vec<MeOrganization>,
 }
 
@@ -154,7 +175,7 @@ pub struct MeOrganization {
     /// The organization's display name.
     pub name: String,
     /// The user's username inside this Organization, when one is set.
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub username: Option<String>,
 }
 
@@ -197,6 +218,7 @@ pub struct Organization {
     /// The organization's display name.
     pub name: String,
     /// Free-form description, when set.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub description: Option<String>,
     /// Billing plan identifier.
     pub plan: String,
@@ -265,7 +287,7 @@ pub struct OrganizationUser {
     /// The member's display name.
     pub name: String,
     /// The member's username inside this Organization, when one is set.
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub username: Option<String>,
 }
 
@@ -289,7 +311,7 @@ pub struct UserProfile {
     /// The user's display name.
     pub name: String,
     /// Canonical avatar URL, when an avatar exists.
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub avatar_url: Option<String>,
     /// When the account joined (RFC 3339).
     pub joined_at: String,
@@ -309,7 +331,7 @@ pub struct ProfileOrganization {
     /// The Organization the username belongs to.
     pub organization: OrganizationSummary,
     /// The target user's username inside that Organization, when set.
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub username: Option<String>,
 }
 
@@ -342,13 +364,14 @@ pub struct Project {
     /// The project's display name.
     pub name: String,
     /// Free-form description, when set.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub description: Option<String>,
     /// Display color as a hex string.
     pub color: String,
     /// Optimistic-concurrency revision (matches the `project-N` `ETag`).
     pub revision: i64,
     /// When the Project was archived; null while unarchived.
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub archived_at: Option<String>,
     /// Creation timestamp (RFC 3339).
     pub created_at: String,
@@ -439,12 +462,16 @@ pub struct Sprint {
     /// The sprint's lifecycle state (`future`, `active`, or `done`).
     pub state: String,
     /// Planned start date (RFC 3339), when the Sprint is dated.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub start_date: Option<String>,
     /// Planned end date (RFC 3339), when the Sprint is dated.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub end_date: Option<String>,
     /// The Sprint goal, when set.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub goal: Option<String>,
     /// The target story-point total, when set.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub target_points: Option<i64>,
     /// Creation timestamp (RFC 3339).
     pub created_at: String,
@@ -667,6 +694,7 @@ pub struct WorkItem {
     /// The work item's title.
     pub title: String,
     /// Free-form description, when set.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub description: Option<String>,
     /// The work item type (e.g. `task`).
     #[serde(rename = "type")]
@@ -676,21 +704,27 @@ pub struct WorkItem {
     /// The current priority.
     pub priority: String,
     /// The assignee, when assigned.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub assignee: Option<UserSummary>,
     /// The reporter, when recorded.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub reporter: Option<UserSummary>,
     /// The sprint, when scheduled.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub sprint: Option<SprintSummary>,
     /// The parent work item, when nested.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub parent: Option<WorkItemParent>,
     /// Labels attached to the item.
     pub labels: Vec<Label>,
     /// Story points, when estimated.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub story_points: Option<i64>,
     /// Due date (RFC 3339), when set.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub due_date: Option<String>,
     /// When the item was archived; null while unarchived.
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub archived_at: Option<String>,
     /// Creation timestamp (RFC 3339).
     pub created_at: String,
@@ -740,10 +774,12 @@ pub struct Comment {
     /// The id of the work item the comment belongs to.
     pub work_item_id: String,
     /// The parent comment id, when this is a reply.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub parent_comment_id: Option<String>,
     /// The comment's author.
     pub author: UserSummary,
     /// The comment body; absent when the comment was deleted.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub body: Option<String>,
     /// Whether the comment was deleted.
     pub deleted: bool,
@@ -752,7 +788,7 @@ pub struct Comment {
     /// Last-update timestamp (RFC 3339).
     pub updated_at: String,
     /// When the comment was last edited; creation and deletion leave it unset.
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub edited_at: Option<String>,
 }
 
@@ -780,6 +816,7 @@ pub struct Attachment {
     /// The file size in bytes.
     pub size: i64,
     /// The creator, when recorded (legacy `{id, name}` summary).
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub created_by: Option<UserSummary>,
     /// Creation timestamp (RFC 3339).
     pub created_at: String,
@@ -805,6 +842,7 @@ pub struct WorkItemLink {
     /// The Work Item on the other side of the link.
     pub other_work_item: LinkOtherWorkItem,
     /// The link creator, when recorded.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub created_by: Option<UserSummary>,
     /// Creation timestamp (RFC 3339).
     pub created_at: String,
@@ -858,9 +896,10 @@ pub struct Activity {
     /// The action kind (e.g. `created`, `status_changed`).
     pub action: String,
     /// The acting user, or null when the actor was deleted.
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub actor: Option<UserSummary>,
     /// The action-specific detail projection, or null.
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_nullable")]
     pub detail: Option<Value>,
     /// Creation timestamp (RFC 3339).
     pub created_at: String,
@@ -958,7 +997,7 @@ pub struct CreateWorkItemRequest {
     /// The sprint id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sprint_id: Option<String>,
-    /// The parent work item id.
+    /// Parent Work Item identifier accepted by the server (key or id).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     /// Story points.
@@ -973,8 +1012,8 @@ pub struct CreateWorkItemRequest {
 ///
 /// Uses tri-state `Option<Option<T>>` fields: outer `None` omits the field,
 /// `Some(None)` sends an explicit `null` (clear), `Some(Some(v))` sets a value.
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateWorkItemRequest {
     /// New title.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -998,7 +1037,7 @@ pub struct UpdateWorkItemRequest {
     /// New sprint; `Some(None)` unschedules.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sprint_id: Option<Option<String>>,
-    /// New parent; `Some(None)` detaches.
+    /// New parent identifier; `Some(None)` detaches.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<Option<String>>,
     /// New story points; `Some(None)` clears the estimate.
@@ -1168,35 +1207,191 @@ pub struct CreateLabelRequest {
     pub color: Option<String>,
 }
 
+/// Body for attaching a Project label to a Work Item.
+///
+/// The live contract accepts either the label id (`labelId`) or its Project-
+/// scoped name (`label`). Callers must set exactly one selector.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachLabelRequest {
+    /// Project label id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label_id: Option<String>,
+    /// Project-scoped label name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Body for read-only Organization Work Item search with SqueakQL.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SqueakQlSearchRequest {
+    /// SqueakQL expression (1–4,096 characters, containing non-whitespace).
+    pub query: String,
+    /// Maximum rows for this page (1–200; server default 50).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Opaque continuation cursor returned by an earlier SqueakQL search.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+/// Body for validating a SqueakQL expression without executing it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SqueakQlValidateRequest {
+    /// SqueakQL expression (1–4,096 characters, containing non-whitespace).
+    pub query: String,
+}
+
+/// Stable diagnostic codes returned by the SqueakQL validator.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SqueakQlDiagnosticCode {
+    /// The expression is not syntactically valid.
+    SqueakqlSyntaxError,
+    /// The expression references an unknown field.
+    SqueakqlUnknownField,
+    /// The expression references an unknown function.
+    SqueakqlUnknownFunction,
+    /// An operand has an incompatible type.
+    SqueakqlTypeMismatch,
+    /// The selected operator is unsupported for its operands.
+    SqueakqlUnsupportedOperator,
+    /// A literal or other value is invalid.
+    SqueakqlInvalidValue,
+    /// The expression exceeds the server's complexity limit.
+    SqueakqlQueryTooComplex,
+}
+
+impl SqueakQlDiagnosticCode {
+    /// Returns the stable code exactly as it appears on the wire.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SqueakqlSyntaxError => "SQUEAKQL_SYNTAX_ERROR",
+            Self::SqueakqlUnknownField => "SQUEAKQL_UNKNOWN_FIELD",
+            Self::SqueakqlUnknownFunction => "SQUEAKQL_UNKNOWN_FUNCTION",
+            Self::SqueakqlTypeMismatch => "SQUEAKQL_TYPE_MISMATCH",
+            Self::SqueakqlUnsupportedOperator => "SQUEAKQL_UNSUPPORTED_OPERATOR",
+            Self::SqueakqlInvalidValue => "SQUEAKQL_INVALID_VALUE",
+            Self::SqueakqlQueryTooComplex => "SQUEAKQL_QUERY_TOO_COMPLEX",
+        }
+    }
+}
+
+/// One source-located SqueakQL validation diagnostic.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqueakQlDiagnostic {
+    /// Stable diagnostic code.
+    pub code: SqueakQlDiagnosticCode,
+    /// Human-readable explanation.
+    pub message: String,
+    /// One-based source line.
+    pub line: u32,
+    /// One-based source column.
+    pub column: u32,
+    /// Optional one-based inclusive ending line.
+    #[serde(default)]
+    pub end_line: Option<u32>,
+    /// Optional one-based inclusive ending column.
+    #[serde(default)]
+    pub end_column: Option<u32>,
+    /// The offending source token, when available.
+    #[serde(default)]
+    pub token: Option<String>,
+    /// Values or constructs expected at the diagnostic location.
+    #[serde(default)]
+    pub expected: Option<Vec<String>>,
+    /// A server-provided correction hint, when available.
+    #[serde(default)]
+    pub suggestion: Option<String>,
+}
+
+/// Result of validating a SqueakQL expression.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqueakQlValidationResponse {
+    /// Whether the expression is valid.
+    pub valid: bool,
+    /// SqueakQL language version (currently `1`).
+    pub language_version: u32,
+    /// Source-located diagnostics; empty when valid.
+    pub errors: Vec<SqueakQlDiagnostic>,
+}
+
 /// Body for `POST .../bulk-work-items`.
 ///
-/// Operations are validated server-side; the CLI forwards them as JSON values
-/// so malformed items surface as per-item embedded errors rather than local
-/// reimplementation of server validation rules.
-#[derive(Debug, Clone, Serialize)]
+/// The envelope is modeled exactly so automation can use the public request
+/// schema directly while the server remains authoritative for validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BulkCreateWorkItemOperation {
+    /// Project key that receives the Work Item.
+    #[serde(rename = "projectKey")]
+    pub project_key: String,
+    /// Work Item title.
+    pub title: String,
+}
+
+/// One bulk Work Item update operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BulkUpdateWorkItemOperation {
+    /// Project key containing the Work Item.
+    pub project_key: String,
+    /// Work Item key to update.
+    pub work_item_key: String,
+    /// Required in `require-revision` mode; omitted for last-write-wins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+    /// Mutable Work Item fields.
+    pub changes: UpdateWorkItemRequest,
+}
+
+/// One bulk Work Item transition operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BulkTransitionWorkItemOperation {
+    /// Project key containing the Work Item.
+    pub project_key: String,
+    /// Work Item key to transition.
+    pub work_item_key: String,
+    /// Required in `require-revision` mode; omitted for last-write-wins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+    /// Target Work Item status.
+    pub target_status: String,
+}
+
+/// Body for `POST .../bulk-work-items`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BulkCreateEnvelope {
-    /// 1–50 create operations (`{projectKey, ...createFields}`).
-    pub operations: Vec<Value>,
+    /// 1–50 create operations.
+    pub operations: Vec<BulkCreateWorkItemOperation>,
 }
 
 /// Body for `PATCH .../bulk-work-items`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BulkUpdateEnvelope {
-    /// `require-revision` (default) or `last-write-wins`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub concurrency: Option<String>,
+    /// `require-revision` or `last-write-wins` (required by the contract).
+    pub concurrency: String,
     /// 1–50 update operations.
-    pub operations: Vec<Value>,
+    pub operations: Vec<BulkUpdateWorkItemOperation>,
 }
 
 /// Body for `POST .../bulk-work-item-transitions`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BulkTransitionEnvelope {
     /// `require-revision` (default) or `last-write-wins`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub concurrency: Option<String>,
     /// 1–50 transition operations.
-    pub operations: Vec<Value>,
+    pub operations: Vec<BulkTransitionWorkItemOperation>,
 }
 
 /// One per-item bulk result, in input order.
@@ -1209,10 +1404,10 @@ pub struct BulkResult {
     pub status: i64,
     /// The created/updated Work Item projection, when the item succeeded.
     #[serde(default)]
-    pub work_item: Option<Value>,
+    pub work_item: Option<WorkItem>,
     /// The embedded error, when the item failed.
     #[serde(default)]
-    pub error: Option<Value>,
+    pub error: Option<std::collections::BTreeMap<String, Value>>,
 }
 
 /// The bulk result list (`{results: [...]}`); there is no `page` envelope.
@@ -1222,7 +1417,6 @@ pub struct BulkResultList {
     pub results: Vec<BulkResult>,
 }
 
-#[cfg(test)]
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1316,20 +1510,18 @@ mod tests {
         }"##;
         let me: Me = serde_json::from_str(raw).unwrap();
         assert_eq!(me.authentication.expires_at, "2027-01-01T00:00:00Z");
-        assert_eq!(me.public_id.as_deref(), Some("usr_cPbfeqnghA-RLpDVOMQhHg"));
+        assert_eq!(me.public_id, "usr_cPbfeqnghA-RLpDVOMQhHg");
         assert_eq!(me.organizations[0].username.as_deref(), Some("n"));
     }
 
     #[test]
-    fn me_accepts_legacy_shape_without_new_fields() {
+    fn me_rejects_shape_missing_current_required_fields() {
         let raw = r##"{
             "id":"u1","name":"N","email":"n@x",
             "authentication":{"type":"pat","credentialId":"c","credentialName":"n","scopes":[],"expiresAt":"2027-01-01T00:00:00Z"},
             "defaultOrganization":null
         }"##;
-        let me: Me = serde_json::from_str(raw).unwrap();
-        assert_eq!(me.public_id, None);
-        assert!(me.organizations.is_empty());
+        assert!(serde_json::from_str::<Me>(raw).is_err());
     }
 
     #[test]
@@ -1468,13 +1660,20 @@ mod tests {
     fn bulk_results_parse() {
         let raw = r##"{
             "results":[
-                {"index":0,"status":201,"workItem":{"id":"1","key":"HAM-1"}},
+                {"index":0,"status":201,"workItem":{
+                    "id":"1","key":"HAM-1","projectId":"p1","title":"T",
+                    "description":null,"type":"task","status":"todo","priority":"medium",
+                    "assignee":null,"reporter":null,"sprint":null,"parent":null,"labels":[],
+                    "storyPoints":null,"dueDate":null,"archivedAt":null,
+                    "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
+                    "revision":1
+                }},
                 {"index":1,"status":400,"error":{"code":"VALIDATION_ERROR","message":"bad"}}
             ]
         }"##;
         let list: BulkResultList = serde_json::from_str(raw).unwrap();
         assert_eq!(list.results.len(), 2);
-        assert_eq!(list.results[0].work_item.as_ref().unwrap()["key"], "HAM-1");
+        assert_eq!(list.results[0].work_item.as_ref().unwrap().key, "HAM-1");
         assert_eq!(
             list.results[1].error.as_ref().unwrap()["code"],
             "VALIDATION_ERROR"

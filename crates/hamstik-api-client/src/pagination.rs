@@ -11,7 +11,7 @@
 
 use std::future::Future;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::ClientError;
 
@@ -34,8 +34,18 @@ pub struct Page {
     #[serde(rename = "hasMore")]
     pub has_more: bool,
     /// The opaque cursor for the next page, when `hasMore` is true.
-    #[serde(rename = "nextCursor", default)]
+    #[serde(
+        rename = "nextCursor",
+        deserialize_with = "deserialize_required_nullable"
+    )]
     pub next_cursor: Option<String>,
+}
+
+fn deserialize_required_nullable<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
 }
 
 /// A single page of decoded items plus their raw JSON, used while aggregating.

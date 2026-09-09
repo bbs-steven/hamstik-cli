@@ -15,6 +15,16 @@ in-progress first release and will be dated and versioned when it ships.
 
 ### Added
 
+- Full support for the current 53-operation Hamstik Public API v1 contract,
+  including `me`, first-class `work mine` / `work my`, SqueakQL search via
+  `work search`, independent `squeakql validate`, and unauthenticated
+  `api openapi` contract retrieval.
+- Parsed OpenAPI parity enforcement through `openapi/api-parity.json`; adding,
+  removing, or moving an operation now fails a test until client, CLI, and test
+  support are deliberately classified.
+- `scripts/update-openapi.sh --check|--update` for explicit live-contract drift
+  checks and validated byte-for-byte snapshot refreshes without making offline
+  builds network-dependent.
 - Typed API client crate (`hamstik-api-client`) with bearer injection,
   retry policy with `Retry-After` awareness, idempotency-key generation,
   ETag capture, cursor pagination helpers, and multipart upload support.
@@ -58,6 +68,19 @@ in-progress first release and will be dated and versioned when it ships.
 
 ### Changed
 
+- Refreshed the frozen OpenAPI snapshot from the live authoritative contract
+  (51 → 53 operations) and aligned required/nullable response fields, bulk
+  request operation types, profile avatar selectors, Work Item parent input,
+  and Work Item label assignment by id or name.
+- My Work and user-profile Work commands expose every filter defined by their
+  respective current operations, including repeated array parameters, sparse
+  fields, due-date filters, archived state, and opaque cursors.
+- Binary download metadata now preserves content type, content length,
+  content disposition, cache control, and request id where the operation
+  defines them; JSON output contains metadata only, never binary bytes.
+- API errors retain `fieldErrors`, `details`, and request ids. Human errors
+  always print the correlation id when available; JSON preserves the complete
+  structured error information.
 - `Me` identity output includes `publicId` and per-Organization `username`;
   `auth status` reports both in human and JSON output.
 - Authentication field names match the deployed API specification
@@ -67,13 +90,13 @@ in-progress first release and will be dated and versioned when it ships.
 
 ### Fixed
 
-- `work edit --parent` and `work create --parent` now accept a Work Item key
-  (e.g. `HAM-42`) as documented, resolving it to the parent UUID client-side
-  before sending; the help text states the accepted forms (`work`).
+- `work edit --parent` and `work create --parent` forward the current API's
+  bounded parent identifier directly so the server remains authoritative for
+  identifier resolution and validation (`work`).
 - `work label add|remove --label` accepts a label name (case-insensitive;
-  labels are stored lowercase) in addition to a UUID, resolving it through the
-  Project label list. An unknown name is a clear `NOT_FOUND` (exit 5) instead
-  of an opaque server validation error (`work label`).
+  labels are stored lowercase) in addition to a UUID. Attach-by-name uses the
+  current request body directly; detach-by-name resolves the id required by
+  the DELETE path (`work label`).
 - `--assignee me` on `work create|edit` resolves to the caller's `usr_` public
   ID via `GET /me` before sending; the server only accepts ids on writes
   (`work`).
@@ -82,8 +105,9 @@ in-progress first release and will be dated and versioned when it ships.
 - `--host` no longer hides a profile's stored credential: the lookup tries the
   selected host first, then the profile host recorded at login, and the
   failure message names both hosts when both were tried (`auth`, `doctor`).
-- `--verbose` human error output now includes the `requestId` and HTTP status
-  of API failures, matching what `--json` always showed (`output`).
+- Human API errors always include `requestId`; `--verbose` additionally shows
+  the HTTP status, matching the structured information retained by `--json`
+  (`output`).
 
 ### Added
 

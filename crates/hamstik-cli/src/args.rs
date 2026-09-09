@@ -81,6 +81,8 @@ pub struct GlobalOptions {
 /// Every CLI subcommand.
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Show the authenticated user and credential context.
+    Me,
     /// Manage authentication and profiles.
     Auth(AuthArgs),
     /// Inspect and manage the working context.
@@ -97,12 +99,50 @@ pub enum Command {
     Work(Box<WorkArgs>),
     /// View user profiles, work, activity, and avatars.
     User(UserArgs),
+    /// Validate SqueakQL expressions.
+    Squeakql(SqueakQlArgs),
+    /// Inspect the Public API contract.
+    Api(ApiArgs),
     /// Verify configuration, credentials, and connectivity.
     Doctor,
     /// Generate a shell completion script.
     Completion(CompletionArgs),
     /// Print the CLI version.
     Version,
+}
+
+/// Arguments for the `squeakql` command group.
+#[derive(Args, Debug)]
+pub struct SqueakQlArgs {
+    /// The SqueakQL subcommand to run.
+    #[command(subcommand)]
+    pub command: SqueakQlCommand,
+}
+
+/// SqueakQL subcommands.
+#[derive(Subcommand, Debug)]
+pub enum SqueakQlCommand {
+    /// Validate an expression without executing it.
+    Validate {
+        /// SqueakQL expression.
+        #[arg(value_name = "QUERY")]
+        query: String,
+    },
+}
+
+/// Arguments for the `api` command group.
+#[derive(Args, Debug)]
+pub struct ApiArgs {
+    /// The API subcommand to run.
+    #[command(subcommand)]
+    pub command: ApiCommand,
+}
+
+/// Public API metadata subcommands.
+#[derive(Subcommand, Debug)]
+pub enum ApiCommand {
+    /// Print the live Public API OpenAPI document.
+    Openapi,
 }
 
 /// Arguments for the `auth` command group.
@@ -482,7 +522,7 @@ pub enum LabelCommand {
 /// Shared list pagination options.
 #[derive(Args, Debug, Clone)]
 pub struct PaginationArgs {
-    /// Maximum items per page (1-100).
+    /// Maximum items per page (endpoint maximum is 100 or 200).
     #[arg(long, value_name = "N")]
     pub limit: Option<u32>,
     /// Opaque continuation cursor.
@@ -518,34 +558,7 @@ pub enum UserCommand {
         public_id: String,
     },
     /// List work items involving a user.
-    Work {
-        /// The user's public ID (usr_...).
-        public_id: String,
-        /// Restrict to involvement kind (repeatable).
-        #[arg(long, value_enum)]
-        involvement: Vec<InvolvementArg>,
-        /// Filter by organization slug (repeatable).
-        #[arg(long)]
-        org: Vec<String>,
-        /// Filter by project key (repeatable).
-        #[arg(long)]
-        project: Vec<String>,
-        /// Filter by status (repeatable).
-        #[arg(long, value_enum)]
-        status: Vec<StatusArg>,
-        /// Status scope.
-        #[arg(long, value_enum)]
-        scope: Option<ScopeArg>,
-        /// Filter by priority (repeatable).
-        #[arg(long, value_enum)]
-        priority: Vec<PriorityArg>,
-        /// Free-text search.
-        #[arg(long = "search", value_name = "TEXT")]
-        search: Option<String>,
-        /// Pagination options.
-        #[command(flatten)]
-        pagination: PaginationArgs,
-    },
+    Work(Box<UserWorkArgs>),
     /// Show a user's visible activity (newest first).
     Activity {
         /// The user's public ID (usr_...).
@@ -565,7 +578,91 @@ pub enum UserCommand {
         /// derived extension).
         #[arg(long = "output", value_name = "PATH", short = 'o')]
         output: Option<String>,
+        /// Opaque avatar version cache selector.
+        #[arg(long = "avatar-version", value_name = "VALUE")]
+        avatar_version: Option<String>,
+        /// Opaque avatar format selector.
+        #[arg(long, value_name = "VALUE")]
+        format: Option<String>,
+        /// Opaque avatar revision cache selector.
+        #[arg(long = "revision", value_name = "VALUE")]
+        revision: Option<String>,
     },
+}
+
+/// Complete filters for `user work`.
+#[derive(Args, Debug)]
+pub struct UserWorkArgs {
+    /// The user's public ID (usr_...).
+    pub public_id: String,
+    /// Restrict to involvement kind (repeatable).
+    #[arg(long, value_enum)]
+    pub involvement: Vec<InvolvementArg>,
+    /// Filter by organization slug (repeatable).
+    #[arg(long)]
+    pub org: Vec<String>,
+    /// Filter by project key (repeatable).
+    #[arg(long)]
+    pub project: Vec<String>,
+    /// Free-text search.
+    #[arg(long = "search", value_name = "TEXT")]
+    pub search: Option<String>,
+    /// Filter by status (repeatable).
+    #[arg(long, value_enum)]
+    pub status: Vec<StatusArg>,
+    /// Status scope.
+    #[arg(long, value_enum)]
+    pub scope: Option<ScopeArg>,
+    /// Filter by type (repeatable).
+    #[arg(long = "type", value_enum)]
+    pub item_type: Vec<TypeArg>,
+    /// Filter by priority (repeatable).
+    #[arg(long, value_enum)]
+    pub priority: Vec<PriorityArg>,
+    /// Filter by sprint id or `none`.
+    #[arg(long, value_name = "NONE|UUID")]
+    pub sprint: Option<String>,
+    /// Filter by label id (repeatable).
+    #[arg(long)]
+    pub label: Vec<String>,
+    /// Filter by label name (repeatable).
+    #[arg(long = "label-name")]
+    pub label_name: Vec<String>,
+    /// Filter by parent Work Item key.
+    #[arg(long)]
+    pub parent: Option<String>,
+    /// Filter by top-level state (a bare flag means true).
+    #[arg(
+        long = "top-level",
+        value_name = "true|false",
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    pub top_level: Option<bool>,
+    /// Only items updated after this RFC 3339 timestamp.
+    #[arg(long = "updated-after", value_name = "RFC3339")]
+    pub updated_after: Option<String>,
+    /// Filter to overdue/on-track Work Items.
+    #[arg(long, value_name = "true|false")]
+    pub overdue: Option<bool>,
+    /// Only items due strictly before this RFC 3339 timestamp.
+    #[arg(long = "due-before", value_name = "RFC3339")]
+    pub due_before: Option<String>,
+    /// Only items due strictly after this RFC 3339 timestamp.
+    #[arg(long = "due-after", value_name = "RFC3339")]
+    pub due_after: Option<String>,
+    /// Result ordering.
+    #[arg(long, value_enum)]
+    pub sort: Option<SortArg>,
+    /// Include archived (true) or only unarchived (false) Work Items.
+    #[arg(long, value_name = "true|false")]
+    pub archived: Option<bool>,
+    /// Comma-separated sparse summary fields.
+    #[arg(long = "fields", value_name = "FIELDS")]
+    pub fields: Option<String>,
+    /// Pagination options.
+    #[command(flatten)]
+    pub pagination: PaginationArgs,
 }
 
 /// Profile work involvement kinds.
@@ -596,6 +693,18 @@ impl InvolvementArg {
 pub enum WorkCommand {
     /// List work items.
     List(WorkListArgs),
+    /// List Work assigned to the authenticated user across Projects.
+    #[command(alias = "my")]
+    Mine(MyWorkArgs),
+    /// Search Organization Work Items with SqueakQL.
+    Search {
+        /// SqueakQL expression.
+        #[arg(value_name = "QUERY")]
+        query: String,
+        /// Pagination options carried in the JSON request body.
+        #[command(flatten)]
+        pagination: PaginationArgs,
+    },
     /// View a work item.
     View {
         /// Work item key (e.g. HAM-42).
@@ -687,6 +796,53 @@ pub enum WorkCommand {
     Bulk(WorkBulkArgs),
 }
 
+/// Filters accepted by the authenticated user's My Work endpoint.
+#[derive(Args, Debug)]
+pub struct MyWorkArgs {
+    /// Filter by Project key (repeatable).
+    #[arg(long)]
+    pub project: Vec<String>,
+    /// Filter by status (repeatable).
+    #[arg(long, value_enum)]
+    pub status: Vec<StatusArg>,
+    /// Status scope.
+    #[arg(long, value_enum)]
+    pub scope: Option<ScopeArg>,
+    /// Filter by type (repeatable).
+    #[arg(long = "type", value_enum)]
+    pub item_type: Vec<TypeArg>,
+    /// Filter by priority (repeatable).
+    #[arg(long, value_enum)]
+    pub priority: Vec<PriorityArg>,
+    /// Filter by label id (repeatable).
+    #[arg(long)]
+    pub label: Vec<String>,
+    /// Filter by label name (repeatable).
+    #[arg(long = "label-name")]
+    pub label_name: Vec<String>,
+    /// Filter to overdue/on-track Work Items.
+    #[arg(long, value_name = "true|false")]
+    pub overdue: Option<bool>,
+    /// Only items due strictly before this RFC 3339 timestamp.
+    #[arg(long = "due-before", value_name = "RFC3339")]
+    pub due_before: Option<String>,
+    /// Only items due strictly after this RFC 3339 timestamp.
+    #[arg(long = "due-after", value_name = "RFC3339")]
+    pub due_after: Option<String>,
+    /// Result ordering.
+    #[arg(long, value_enum)]
+    pub sort: Option<SortArg>,
+    /// Include archived (true) or only unarchived (false) Work Items.
+    #[arg(long, value_name = "true|false")]
+    pub archived: Option<bool>,
+    /// Comma-separated sparse summary fields.
+    #[arg(long = "fields", value_name = "FIELDS")]
+    pub fields: Option<String>,
+    /// Pagination options.
+    #[command(flatten)]
+    pub pagination: PaginationArgs,
+}
+
 /// Work Item filter options shared by `work list` and `org work`.
 #[derive(Args, Debug)]
 pub struct WorkFilters {
@@ -720,9 +876,14 @@ pub struct WorkFilters {
     /// Filter by parent work item key.
     #[arg(long)]
     pub parent: Option<String>,
-    /// Only top-level work items.
-    #[arg(long = "top-level")]
-    pub top_level: bool,
+    /// Filter by top-level state (a bare flag means true).
+    #[arg(
+        long = "top-level",
+        value_name = "true|false",
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    pub top_level: Option<bool>,
     /// Only items updated at/after this RFC 3339 timestamp.
     #[arg(long = "updated-after", value_name = "RFC3339")]
     pub updated_after: Option<String>,

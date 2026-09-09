@@ -8,6 +8,8 @@
 //! structure to (a) map to a stable exit code and (b) render either a human
 //! message or the stable JSON failure envelope (SPEC §54).
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 use thiserror::Error;
 
@@ -68,6 +70,10 @@ pub struct CliError {
     pub request_id: Option<String>,
     /// HTTP status, when the failure came from an API response.
     pub status: Option<u16>,
+    /// Per-field validation errors returned by the Public API.
+    pub field_errors: Box<BTreeMap<String, Vec<String>>>,
+    /// Operation-specific structured error details returned by the API.
+    pub details: Option<Box<BTreeMap<String, Value>>>,
     /// Underlying error, when one exists.
     #[source]
     pub source: Option<Box<dyn std::error::Error + Send + Sync>>,
@@ -81,6 +87,8 @@ impl CliError {
             message: message.into(),
             request_id: None,
             status: None,
+            field_errors: Box::default(),
+            details: None,
             source: None,
         }
     }
@@ -151,6 +159,8 @@ impl CliError {
             message: api.message.clone(),
             request_id: api.request_id.clone(),
             status: Some(api.status),
+            field_errors: Box::new(api.field_errors.clone()),
+            details: api.details.clone().map(Box::new),
             source: None,
         }
     }
@@ -188,6 +198,12 @@ impl CliError {
         if let Some(status) = self.status {
             error["status"] = Value::from(status);
         }
+        if !self.field_errors.is_empty() {
+            error["fieldErrors"] = json!(self.field_errors);
+        }
+        if let Some(details) = &self.details {
+            error["details"] = json!(details);
+        }
         json!({ "error": error })
     }
 }
@@ -214,16 +230,17 @@ fn exit_code_for_api_code(code: &str, status: u16) -> i32 {
         | "WORK_ITEM_HAS_CHILDREN"
         | "PROJECT_ARCHIVED" => exit::CONFLICT,
         "RATE_LIMITED" => exit::RATE_LIMITED,
-        "VALIDATION_ERROR" | "INVALID_CURSOR" | "PAYLOAD_TOO_LARGE" | "PRECONDITION_REQUIRED" => {
-            exit::USAGE
-        }
+        "VALIDATION_ERROR"
+        | "INVALID_CURSOR"
+        | "PAYLOAD_TOO_LARGE"
+        | "PRECONDITION_REQUIRED"
+        | "IDEMPOTENCY_KEY_REQUIRED" => exit::USAGE,
         // Anything else: fall back to HTTP-status semantics.
         _ if (500..600).contains(&status) => exit::SERVER,
         _ => exit::GENERAL,
     }
 }
 
-#[cfg(test)]
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -236,6 +253,7 @@ mod tests {
             message: "msg".to_string(),
             request_id: Some("req".to_string()),
             field_errors: Default::default(),
+            details: None,
             retry_after: None,
             rate_limit: None,
         })

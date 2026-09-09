@@ -400,31 +400,27 @@ May automatically retry:
 
 ---
 
-## Idempotent POST
+## Idempotency-key-protected mutations
 
-For:
+For every operation where the checked-in Public API contract requires an
+`Idempotency-Key` (including POST, PATCH, and DELETE operations), the CLI
+generates a key once per logical operation.
 
-```text
-Work Item create
-transition
-comment create
-```
-
-the CLI generates an idempotency key once per logical operation.
-
-Internal retry MUST reuse that exact key.
+Internal retry MUST reuse that exact key and request body.
 
 May retry the same transient classes as GET.
+
+Read-only POST operations such as SqueakQL search and validation do not receive
+an idempotency key; they may be retried as reads.
 
 ---
 
 ## PATCH
 
-Do NOT automatically retry an ambiguous PATCH after it may have reached the server.
-
-Because Public API PATCH currently relies on ETag concurrency rather than idempotency, automatic replay could produce confusing outcomes.
-
-Surface the failure.
+An ambiguous PATCH may be retried only when that operation requires an
+idempotency key, reusing the same key and request body. A revision-sensitive
+PATCH without an idempotency key (currently Work Item update) MUST surface the
+failure instead of replaying it.
 
 ---
 

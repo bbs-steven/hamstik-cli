@@ -6,10 +6,12 @@
 
 use serde_json::{Value, json};
 
-use hamstik_api_client::{ActivityOptions, ListWorkItemsQuery, PageItems, follow_all};
+use hamstik_api_client::{
+    ActivityOptions, AvatarOptions, ListWorkItemsQuery, PageItems, follow_all,
+};
 
 use crate::app::Session;
-use crate::args::{UserArgs, UserCommand};
+use crate::args::{UserArgs, UserCommand, UserWorkArgs};
 use crate::error::CliError;
 
 use super::org::render_lines;
@@ -19,38 +21,30 @@ use super::{emit_json, emit_table, emit_view};
 pub async fn run(session: &mut Session<'_>, args: &UserArgs) -> Result<(), CliError> {
     match &args.command {
         UserCommand::View { public_id } => view(session, public_id).await,
-        UserCommand::Work {
-            public_id,
-            involvement,
-            org,
-            project,
-            status,
-            scope,
-            priority,
-            search,
-            pagination,
-        } => {
-            work(
-                session,
-                public_id,
-                involvement,
-                org,
-                project,
-                status,
-                *scope,
-                priority,
-                search.as_deref(),
-                pagination,
-            )
-            .await
-        }
+        UserCommand::Work(work_args) => work(session, work_args).await,
         UserCommand::Activity {
             public_id,
             since,
             pagination,
         } => activity(session, public_id, since.as_deref(), pagination).await,
-        UserCommand::Avatar { public_id, output } => {
-            avatar(session, public_id, output.as_deref()).await
+        UserCommand::Avatar {
+            public_id,
+            output,
+            avatar_version,
+            format,
+            revision,
+        } => {
+            avatar(
+                session,
+                public_id,
+                output.as_deref(),
+                AvatarOptions {
+                    version: avatar_version.clone(),
+                    format: format.clone(),
+                    revision: revision.clone(),
+                },
+            )
+            .await
         }
     }
 }
@@ -107,37 +101,54 @@ async fn view(session: &mut Session<'_>, public_id: &str) -> Result<(), CliError
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn work(
-    session: &mut Session<'_>,
-    public_id: &str,
-    involvement: &[crate::args::InvolvementArg],
-    org: &[String],
-    project: &[String],
-    status: &[crate::args::StatusArg],
-    scope: Option<crate::args::ScopeArg>,
-    priority: &[crate::args::PriorityArg],
-    search: Option<&str>,
-    pagination: &crate::args::PaginationArgs,
-) -> Result<(), CliError> {
+async fn work(session: &mut Session<'_>, args: &UserWorkArgs) -> Result<(), CliError> {
     let selection = session.selection()?;
     let api = session.api(&selection)?;
-    let target = resolve_target(session, public_id).await?;
+    let target = resolve_target(session, &args.public_id).await?;
     let base = ListWorkItemsQuery {
-        limit: pagination.limit,
-        cursor: pagination.cursor.clone(),
-        involvement: involvement.iter().map(|i| i.as_str().to_string()).collect(),
-        organizations: org.to_vec(),
-        projects: project.to_vec(),
-        status: status.iter().map(|s| s.as_str().to_string()).collect(),
-        scope: scope.map(|s| s.as_str().to_string()),
-        priority: priority.iter().map(|p| p.as_str().to_string()).collect(),
-        q: search.map(str::to_string),
+        limit: args.pagination.limit,
+        cursor: args.pagination.cursor.clone(),
+        involvement: args
+            .involvement
+            .iter()
+            .map(|value| value.as_str().to_string())
+            .collect(),
+        organizations: args.org.clone(),
+        projects: args.project.clone(),
+        q: args.search.clone(),
+        status: args
+            .status
+            .iter()
+            .map(|value| value.as_str().to_string())
+            .collect(),
+        scope: args.scope.map(|value| value.as_str().to_string()),
+        item_type: args
+            .item_type
+            .iter()
+            .map(|value| value.as_str().to_string())
+            .collect(),
+        priority: args
+            .priority
+            .iter()
+            .map(|value| value.as_str().to_string())
+            .collect(),
+        sprint: args.sprint.clone(),
+        label: args.label.clone(),
+        label_name: args.label_name.clone(),
+        parent: args.parent.clone(),
+        top_level: args.top_level,
+        updated_after: args.updated_after.clone(),
+        overdue: args.overdue,
+        due_before: args.due_before.clone(),
+        due_after: args.due_after.clone(),
+        sort: args.sort.map(|value| value.as_str().to_string()),
+        archived: args.archived,
+        fields: args.fields.clone(),
         // Profile Work fixes the target as the assignee; the caller cannot
         // choose one.
         ..Default::default()
     };
-    let json_value: Value = if pagination.all {
+    let json_value: Value = if args.pagination.all {
         let fetch_api = api.clone();
         let public_id = target.clone();
         let page = follow_all(move |cursor| {
@@ -314,12 +325,13 @@ async fn avatar(
     session: &mut Session<'_>,
     public_id: &str,
     output: Option<&str>,
+    opts: AvatarOptions,
 ) -> Result<(), CliError> {
     let selection = session.selection()?;
     let api = session.api(&selection)?;
     let target_user = resolve_target(session, public_id).await?;
     let download = api
-        .get_user_profile_avatar(&target_user)
+        .get_user_profile_avatar(&target_user, opts)
         .await
         .map_err(CliError::from_client)?;
     let target = match output {
@@ -347,6 +359,11 @@ async fn avatar(
                 "publicId": target_user,
                 "path": target.display().to_string(),
                 "size": download.bytes.len(),
+                "contentType": download.content_type,
+                "contentLength": download.content_length,
+                "contentDisposition": download.content_disposition,
+                "cacheControl": download.cache_control,
+                "requestId": download.request_id,
             }),
         )
     } else {

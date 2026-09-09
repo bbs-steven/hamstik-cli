@@ -25,16 +25,18 @@ fn work_item_json(status: &str, revision: i64) -> Value {
         "id": "1", "key": "HAM-1", "projectId": "2", "title": "T", "description": null,
         "type": "task", "status": status, "priority": "low", "assignee": null, "reporter": null,
         "sprint": null, "parent": null, "labels": [],
-        "storyPoints": null, "dueDate": null,
+        "storyPoints": null, "dueDate": null, "archivedAt": null,
         "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z", "revision": revision
     })
 }
 
 fn me_json() -> Value {
     json!({
-        "id": "u1", "name": "Steven", "email": "steven@example.com",
+        "id": "u1", "publicId": "usr_cPbfeqnghA-RLpDVOMQhHg",
+        "name": "Steven", "email": "steven@example.com",
         "authentication": {"type": "pat", "credentialId": "c", "credentialName": "n", "scopes": [], "expiresAt": "2027-01-01T00:00:00Z"},
-        "defaultOrganization": null
+        "defaultOrganization": null,
+        "organizations": []
     })
 }
 
@@ -339,6 +341,8 @@ async fn doctor_reports_terminal_capabilities_in_json() {
             .args(["doctor", "--json"])
             .env("TERM", "xterm-256color")
             .env("LANG", "en_US.UTF-8")
+            .env_remove("NO_COLOR")
+            .env_remove("CLICOLOR_FORCE")
             .output()
             .unwrap()
             .stdout,
@@ -965,7 +969,7 @@ async fn org_use_persists_validated_slug() {
         .and(path("/api/v1/organizations/sph"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": "o1", "slug": "sph", "name": "SPH", "role": "member",
-            "plan": "pro", "isDefault": false, "suspended": false,
+            "description": null, "plan": "pro", "isDefault": false, "suspended": false,
             "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
         })))
         .mount(&server)
@@ -1342,8 +1346,7 @@ async fn work_label_add_sends_if_match_and_label_id() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn work_label_add_resolves_label_name_to_id() {
-    const LABEL_ID: &str = "11111111-2222-4333-8444-555555555555";
+async fn work_label_add_sends_label_name_directly() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(
@@ -1354,21 +1357,6 @@ async fn work_label_add_resolves_label_name_to_id() {
                 .insert_header("ETag", "\"wi-4\"")
                 .set_body_json(work_item_json("todo", 4)),
         )
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/api/v1/organizations/acme/projects/HAM/labels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "items": [
-                {
-                    "id": LABEL_ID,
-                    "name": "frontend",
-                    "color": "#6366f1",
-                    "createdAt": "2026-01-01T00:00:00.000Z",
-                }
-            ],
-            "page": {"limit": 200, "hasMore": false, "nextCursor": null},
-        })))
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -1409,7 +1397,9 @@ async fn work_label_add_resolves_label_name_to_id() {
         .find(|r| r.method.as_str() == "POST")
         .unwrap();
     let body: Value = serde_json::from_slice(&req.body).unwrap();
-    assert_eq!(body["labelId"], LABEL_ID);
+    assert_eq!(body["label"], "frontend");
+    assert!(body.get("labelId").is_none());
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1865,7 +1855,8 @@ fn me_public_json() -> Value {
     json!({
         "id": "u1", "publicId": "usr_cPbfeqnghA-RLpDVOMQhHg", "name": "Steven", "email": "steven@example.com",
         "authentication": {"type": "pat", "credentialId": "c", "credentialName": "n", "scopes": [], "expiresAt": "2027-01-01T00:00:00Z"},
-        "defaultOrganization": null
+        "defaultOrganization": null,
+        "organizations": []
     })
 }
 
@@ -1942,8 +1933,7 @@ async fn work_create_resolves_assignee_me_via_whoami() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn work_edit_resolves_parent_key_to_uuid() {
-    const PARENT_ID: &str = "22222222-3333-4444-8555-666666666666";
+async fn work_edit_forwards_parent_identifier_to_the_server() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(
@@ -1954,22 +1944,6 @@ async fn work_edit_resolves_parent_key_to_uuid() {
                 .insert_header("ETag", "\"wi-9\"")
                 .set_body_json(work_item_json("todo", 9)),
         )
-        .mount(&server)
-        .await;
-    // The parent read: detail endpoint with key -> carries the id.
-    Mock::given(method("GET"))
-        .and(path(
-            "/api/v1/organizations/acme/projects/HAM/work-items/HAM-1",
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": PARENT_ID, "key": "HAM-1", "title": "parent",
-            "type": "task", "status": "todo", "priority": "low",
-            "assignee": null, "reporter": null, "sprint": null,
-            "parent": null, "labels": [], "storyPoints": null, "dueDate": null,
-            "description": null,
-            "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z",
-            "revision": 1, "projectId": "p1"
-        })))
         .mount(&server)
         .await;
     Mock::given(method("PATCH"))
@@ -2012,7 +1986,8 @@ async fn work_edit_resolves_parent_key_to_uuid() {
             .body,
     )
     .unwrap();
-    assert_eq!(body["parentId"], PARENT_ID);
+    assert_eq!(body["parentId"], "HAM-1");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2026,13 +2001,13 @@ async fn work_comment_list_excludes_deleted() {
             "items": [
                 {"id": "c1", "workItemId": "w1", "parentCommentId": null,
                  "author": {"id": "u1", "name": "Steven"}, "body": "alive",
-                 "deleted": false, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"},
+                 "deleted": false, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z", "editedAt": null},
                 {"id": "c2", "workItemId": "w1", "parentCommentId": "c1",
                  "author": {"id": "u1", "name": "Steven"}, "body": null,
-                 "deleted": true, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"},
+                 "deleted": true, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z", "editedAt": null},
                 {"id": "c3", "workItemId": "w1", "parentCommentId": null,
                  "author": {"id": "u1", "name": "Steven"}, "body": "also alive",
-                 "deleted": false, "createdAt": "2026-01-02T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z"}
+                 "deleted": false, "createdAt": "2026-01-02T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z", "editedAt": null}
             ],
             "page": {"limit": 50, "hasMore": false, "nextCursor": null}
         })))
@@ -2040,6 +2015,25 @@ async fn work_comment_list_excludes_deleted() {
         .await;
 
     let dir = TempDir::new().unwrap();
+    let threaded = base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "--project",
+            "HAM",
+            "work",
+            "comment",
+            "list",
+            "HAM-1",
+        ])
+        .output()
+        .unwrap();
+    assert!(threaded.status.success());
+    let threaded_stdout = String::from_utf8(threaded.stdout).unwrap();
+    assert!(threaded_stdout.contains("PARENT"));
+    assert!(threaded_stdout.contains("c1"));
+    assert!(threaded_stdout.contains("(deleted)"));
+
     let output = base(&server, &dir)
         .args([
             "--org",
@@ -2086,6 +2080,7 @@ async fn work_list_supports_sort_and_archived_filters() {
             "true",
             "--archived",
             "false",
+            "--top-level=false",
         ])
         .assert()
         .success();
@@ -2098,6 +2093,7 @@ async fn work_list_supports_sort_and_archived_filters() {
     assert!(query.contains("sort=dueDate"), "{query}");
     assert!(query.contains("overdue=true"), "{query}");
     assert!(query.contains("archived=false"), "{query}");
+    assert!(query.contains("topLevel=false"), "{query}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2365,7 +2361,7 @@ async fn work_bulk_create_sends_operations() {
     Mock::given(method("POST"))
         .and(path("/api/v1/organizations/acme/bulk-work-items"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"index": 0, "status": 201, "workItem": {"id": "1", "key": "HAM-1"}}]
+            "results": [{"index": 0, "status": 201, "workItem": work_item_json("todo", 1)}]
         })))
         .mount(&server)
         .await;
@@ -2726,6 +2722,8 @@ async fn user_avatar_downloads_bytes() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("Content-Type", "image/png")
+                .insert_header("Cache-Control", "public, max-age=3600")
+                .insert_header("X-Request-Id", "avatar-request")
                 .set_body_bytes(vec![1, 2, 3]),
         )
         .mount(&server)
@@ -2733,18 +2731,37 @@ async fn user_avatar_downloads_bytes() {
 
     let dir = TempDir::new().unwrap();
     let output_path = dir.path().join("avatar.png");
-    base(&server, &dir)
+    let output = base(&server, &dir)
         .args([
             "user",
             "avatar",
             "usr_cPbfeqnghA-RLpDVOMQhHg",
             "--output",
             output_path.to_str().unwrap(),
+            "--avatar-version",
+            "v2",
+            "--format",
+            "png",
+            "--revision",
+            "opaque-rev",
             "--json",
         ])
-        .assert()
-        .success();
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
     assert_eq!(std::fs::read(&output_path).unwrap(), vec![1, 2, 3]);
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["contentType"], "image/png");
+    assert_eq!(body["cacheControl"], "public, max-age=3600");
+    assert_eq!(body["requestId"], "avatar-request");
+    let query = server.received_requests().await.unwrap()[0]
+        .url
+        .query()
+        .unwrap()
+        .to_string();
+    assert!(query.contains("v=v2"), "{query}");
+    assert!(query.contains("format=png"), "{query}");
+    assert!(query.contains("rev=opaque-rev"), "{query}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2764,4 +2781,270 @@ async fn auth_status_reports_public_id() {
     assert!(output.status.success());
     let body: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(body["user"]["publicId"], "usr_cPbfeqnghA-RLpDVOMQhHg");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn me_exposes_the_complete_identity_projection() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "u1",
+            "publicId": "usr_cPbfeqnghA-RLpDVOMQhHg",
+            "name": "Steven",
+            "email": "steven@example.com",
+            "authentication": {
+                "type": "pat",
+                "credentialId": "credential-1",
+                "credentialName": "automation",
+                "scopes": ["profile:read", "work-item:read"],
+                "expiresAt": "2027-01-01T00:00:00Z"
+            },
+            "defaultOrganization": {"id": "o1", "slug": "acme", "name": "Acme"},
+            "organizations": [
+                {"id": "o1", "slug": "acme", "name": "Acme", "username": "steven"},
+                {"id": "o2", "slug": "labs", "name": "Labs", "username": null}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir).args(["me", "--json"]).output().unwrap();
+    assert!(output.status.success());
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["publicId"], "usr_cPbfeqnghA-RLpDVOMQhHg");
+    assert_eq!(body["authentication"]["credentialName"], "automation");
+    assert_eq!(body["defaultOrganization"]["slug"], "acme");
+    assert_eq!(body["organizations"][0]["username"], "steven");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn api_openapi_is_available_without_a_token_and_sends_no_authorization() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/openapi.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "openapi": "3.1.1",
+            "paths": {"/api/v1/me": {}}
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .env_remove("HAMSTIK_TOKEN")
+        .args(["api", "openapi"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["openapi"], "3.1.1");
+    let request = &server.received_requests().await.unwrap()[0];
+    assert!(!request.headers.contains_key("authorization"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_search_uses_squeakql_json_post_without_idempotency() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/work-items/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([{
+            "id": "wi-1", "key": "HAM-7", "revision": 3, "title": "Search result",
+            "status": "todo",
+            "project": {"id": "p1", "key": "HAM", "name": "Ham", "color": "#000000"},
+            "organization": {"id": "o1", "slug": "acme", "name": "Acme"}
+        }]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "work",
+            "search",
+            "status = todo and priority >= high",
+            "--limit",
+            "25",
+            "--cursor",
+            "opaque+/cursor==",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["items"][0]["key"], "HAM-7");
+    let request = &server.received_requests().await.unwrap()[0];
+    assert!(request.url.query().is_none());
+    assert!(!request.headers.contains_key("idempotency-key"));
+    let sent: Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(sent["query"], "status = todo and priority >= high");
+    assert_eq!(sent["limit"], 25);
+    assert_eq!(sent["cursor"], "opaque+/cursor==");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn squeakql_validate_renders_diagnostics_and_preserves_json() {
+    let server = MockServer::start().await;
+    let validation = json!({
+        "valid": false,
+        "languageVersion": 1,
+        "errors": [{
+            "code": "SQUEAKQL_UNKNOWN_FIELD",
+            "message": "Unknown field statuz",
+            "line": 1,
+            "column": 1,
+            "endLine": 1,
+            "endColumn": 6,
+            "token": "statuz",
+            "expected": ["status"],
+            "suggestion": "status"
+        }]
+    });
+    Mock::given(method("POST"))
+        .and(path("/api/v1/organizations/acme/squeakql/validate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(validation.clone()))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["--org", "acme", "squeakql", "validate", "statuz = todo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SQUEAKQL_UNKNOWN_FIELD"))
+        .stdout(predicate::str::contains("suggestion: status"));
+    let output = base(&server, &dir)
+        .args([
+            "--org",
+            "acme",
+            "squeakql",
+            "validate",
+            "statuz = todo",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        validation
+    );
+    for request in server.received_requests().await.unwrap() {
+        assert!(!request.headers.contains_key("idempotency-key"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&request.body).unwrap(),
+            json!({"query": "statuz = todo"})
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_mine_exposes_all_current_filters_with_repeated_values() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/my/work"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([]))))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args([
+            "work",
+            "mine",
+            "--project",
+            "HAM",
+            "--project",
+            "WEB",
+            "--status",
+            "todo",
+            "--status",
+            "in_progress",
+            "--scope",
+            "open",
+            "--type",
+            "task",
+            "--priority",
+            "high",
+            "--label",
+            "label-1",
+            "--label-name",
+            "api",
+            "--overdue",
+            "false",
+            "--due-before",
+            "2026-10-01T00:00:00Z",
+            "--due-after",
+            "2026-09-01T00:00:00Z",
+            "--sort",
+            "dueDate",
+            "--archived",
+            "true",
+            "--fields",
+            "title,status,dueDate",
+            "--limit",
+            "17",
+            "--cursor",
+            "opaque+/cursor==",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let request = &server.received_requests().await.unwrap()[0];
+    let pairs: Vec<(String, String)> = request
+        .url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    assert_eq!(pairs.iter().filter(|(key, _)| key == "project").count(), 2);
+    assert_eq!(pairs.iter().filter(|(key, _)| key == "status").count(), 2);
+    assert!(pairs.contains(&("overdue".into(), "false".into())));
+    assert!(pairs.contains(&("archived".into(), "true".into())));
+    assert!(pairs.contains(&("cursor".into(), "opaque+/cursor==".into())));
+    assert!(pairs.contains(&("fields".into(), "title,status,dueDate".into())));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn structured_api_errors_preserve_fields_details_and_request_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "Invalid organization",
+                "fieldErrors": {"organizationSlug": ["has an invalid shape"]},
+                "details": {"received": "acme", "rule": "slug"}
+            },
+            "requestId": "req-validation-1"
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    base(&server, &dir)
+        .args(["org", "view", "acme"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "organizationSlug: has an invalid shape",
+        ))
+        .stderr(predicate::str::contains("request id: req-validation-1"));
+    let output = base(&server, &dir)
+        .args(["org", "view", "acme", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let body: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(body["error"]["requestId"], "req-validation-1");
+    assert_eq!(
+        body["error"]["fieldErrors"]["organizationSlug"][0],
+        "has an invalid shape"
+    );
+    assert_eq!(body["error"]["details"]["rule"], "slug");
 }
