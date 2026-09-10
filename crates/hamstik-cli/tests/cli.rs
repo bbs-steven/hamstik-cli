@@ -40,6 +40,18 @@ fn me_json() -> Value {
     })
 }
 
+/// Mounts the checked-in compatible Public API contract for doctor tests.
+async fn mount_doctor_openapi(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/api/v1/openapi.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            include_str!("../../../openapi/hamstik-v1.json"),
+            "application/json",
+        ))
+        .mount(server)
+        .await;
+}
+
 /// Base command wired to `server` + a throwaway config, using an ephemeral token.
 fn base(server: &MockServer, dir: &TempDir) -> Command {
     let mut cmd = Command::cargo_bin("hamstik").expect("hamstik binary");
@@ -308,6 +320,7 @@ async fn work_list_requires_project() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn doctor_reports_ready_when_authenticated() {
     let server = MockServer::start().await;
+    mount_doctor_openapi(&server).await;
     Mock::given(method("GET"))
         .and(path("/api/v1/me"))
         .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
@@ -322,11 +335,55 @@ async fn doctor_reports_ready_when_authenticated() {
     assert!(output.status.success());
     let body: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(body["ok"], true);
+    assert_eq!(body["schemaVersion"], 1);
+    assert_eq!(body["exitCode"], 0);
+    let checks = body["checks"].as_array().unwrap();
+    for id in [
+        "local.config",
+        "local.context_resolution",
+        "local.host",
+        "credential.source",
+        "network.connectivity",
+        "api.openapi",
+        "api.compatibility",
+        "api.authentication",
+    ] {
+        assert!(
+            checks.iter().any(|check| check["id"] == id),
+            "missing doctor check {id}: {body}"
+        );
+    }
+    assert_eq!(
+        checks
+            .iter()
+            .find(|check| check["id"] == "api.compatibility")
+            .unwrap()["status"],
+        "pass"
+    );
+
+    let requests = server.received_requests().await.unwrap();
+    let openapi = requests
+        .iter()
+        .find(|request| request.url.path() == "/api/v1/openapi.json")
+        .unwrap();
+    assert!(
+        openapi.headers.get("authorization").is_none(),
+        "the public compatibility probe must not send the PAT"
+    );
+    let me = requests
+        .iter()
+        .find(|request| request.url.path() == "/api/v1/me")
+        .unwrap();
+    assert_eq!(
+        me.headers.get("authorization").unwrap().to_str().unwrap(),
+        "Bearer secret-token"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn doctor_reports_terminal_capabilities_in_json() {
     let server = MockServer::start().await;
+    mount_doctor_openapi(&server).await;
     Mock::given(method("GET"))
         .and(path("/api/v1/me"))
         .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
@@ -396,6 +453,7 @@ async fn doctor_reports_terminal_capabilities_in_json() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn doctor_reports_disabled_color_when_no_color_flag() {
     let server = MockServer::start().await;
+    mount_doctor_openapi(&server).await;
     Mock::given(method("GET"))
         .and(path("/api/v1/me"))
         .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
@@ -428,6 +486,7 @@ async fn doctor_reports_disabled_color_when_no_color_flag() {
 async fn doctor_terminal_checks_are_informational_only() {
     // A dumb terminal must not fail doctor: it is a working, plain-text setup.
     let server = MockServer::start().await;
+    mount_doctor_openapi(&server).await;
     Mock::given(method("GET"))
         .and(path("/api/v1/me"))
         .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
@@ -466,8 +525,9 @@ async fn doctor_terminal_checks_are_informational_only() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn doctor_human_output_shows_samples_without_ansi_when_piped() {
+async fn doctor_human_output_omits_visual_samples_and_ansi_when_piped() {
     let server = MockServer::start().await;
+    mount_doctor_openapi(&server).await;
     Mock::given(method("GET"))
         .and(path("/api/v1/me"))
         .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
@@ -475,8 +535,8 @@ async fn doctor_human_output_shows_samples_without_ansi_when_piped() {
         .await;
 
     let dir = TempDir::new().unwrap();
-    // Piped stdout (the default under assert_cmd) must stay ANSI-free and
-    // still show the emoji sample line for visual confirmation.
+    // Piped stdout (the default under assert_cmd) must stay ANSI-free and not
+    // include interactive-only visual samples.
     let output = base(&server, &dir)
         .env("TERM", "xterm-256color")
         .env("LANG", "en_US.UTF-8")
@@ -487,7 +547,8 @@ async fn doctor_human_output_shows_samples_without_ansi_when_piped() {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(stdout.contains("terminal color"), "{stdout}");
     assert!(stdout.contains("terminal emoji"), "{stdout}");
-    assert!(stdout.contains("emoji sample"), "{stdout}");
+    assert!(!stdout.contains("emoji sample"), "{stdout}");
+    assert!(!stdout.contains("color sample"), "{stdout}");
     assert!(
         !stdout.contains('\u{1b}'),
         "piped output must not emit ANSI: {stdout}"
@@ -497,6 +558,7 @@ async fn doctor_human_output_shows_samples_without_ansi_when_piped() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn doctor_color_probe_respects_no_color_env() {
     let server = MockServer::start().await;
+    mount_doctor_openapi(&server).await;
     Mock::given(method("GET"))
         .and(path("/api/v1/me"))
         .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
@@ -532,13 +594,194 @@ async fn doctor_color_probe_respects_no_color_env() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn doctor_fails_without_credentials() {
     let server = MockServer::start().await;
+    mount_doctor_openapi(&server).await;
     let dir = TempDir::new().unwrap();
     base(&server, &dir)
         .env_remove("HAMSTIK_TOKEN")
         .args(["doctor"])
         .assert()
         .code(3)
-        .stdout(predicate::str::contains("no token available"));
+        .stdout(predicate::str::contains(
+            "no selected profile and HAMSTIK_TOKEN is not set",
+        ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn doctor_validates_selected_organization_and_project() {
+    let server = MockServer::start().await;
+    mount_doctor_openapi(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "o1",
+            "slug": "acme",
+            "name": "Acme",
+            "description": null,
+            "plan": "pro",
+            "role": "admin",
+            "isDefault": true,
+            "suspended": false,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-02T00:00:00Z"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/organizations/acme/projects/HAM"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "p1",
+            "organizationId": "o1",
+            "key": "HAM",
+            "name": "Hamstik",
+            "description": null,
+            "color": "#3b82f6",
+            "revision": 4,
+            "archivedAt": null,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-02T00:00:00Z"
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args(["--org", "acme", "--project", "HAM", "doctor", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    for id in ["context.organization", "context.project"] {
+        let check = body["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["id"] == id)
+            .unwrap();
+        assert_eq!(check["status"], "pass", "{check}");
+        assert!(check["durationMs"].is_number(), "{check}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn doctor_rejects_a_contract_missing_a_required_operation() {
+    let server = MockServer::start().await;
+    let mut contract: Value =
+        serde_json::from_str(include_str!("../../../openapi/hamstik-v1.json")).unwrap();
+    contract["paths"]
+        .as_object_mut()
+        .unwrap()
+        .remove("/api/v1/me");
+    Mock::given(method("GET"))
+        .and(path("/api/v1/openapi.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(contract))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(me_json()))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(9));
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["exitCode"], 9);
+    let compatibility = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "api.compatibility")
+        .unwrap();
+    assert_eq!(compatibility["status"], "fail");
+    assert_eq!(compatibility["error"]["code"], "PROTOCOL_ERROR");
+    assert!(compatibility["detail"].as_str().unwrap().contains("getMe"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn doctor_preserves_authentication_request_id() {
+    let server = MockServer::start().await;
+    mount_doctor_openapi(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/me"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .insert_header("X-Request-Id", "req-doctor-auth")
+                .set_body_json(json!({
+                    "error": {
+                        "code": "INVALID_TOKEN",
+                        "message": "The PAT is invalid",
+                        "requestId": "req-doctor-auth"
+                    }
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let output = base(&server, &dir)
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let authentication = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "api.authentication")
+        .unwrap();
+    assert_eq!(authentication["status"], "fail");
+    assert_eq!(authentication["requestId"], "req-doctor-auth");
+    assert_eq!(authentication["error"]["requestId"], "req-doctor-auth");
+    assert_eq!(authentication["error"]["code"], "INVALID_TOKEN");
+    assert_eq!(authentication["error"]["httpStatus"], 401);
+}
+
+#[test]
+fn doctor_reports_network_failure_and_skips_dependent_checks() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+
+    let dir = TempDir::new().unwrap();
+    let output = config_command(&dir)
+        .env("HAMSTIK_TOKEN", "ephemeral-token")
+        .args([
+            "--host",
+            &format!("http://{address}"),
+            "--no-retry",
+            "doctor",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(8));
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["exitCode"], 8);
+    let checks = body["checks"].as_array().unwrap();
+    let network = checks
+        .iter()
+        .find(|check| check["id"] == "network.connectivity")
+        .unwrap();
+    assert_eq!(network["status"], "fail");
+    assert_eq!(network["error"]["code"], "NETWORK_ERROR");
+    for id in ["network.tls", "api.openapi", "api.authentication"] {
+        assert_eq!(
+            checks.iter().find(|check| check["id"] == id).unwrap()["status"],
+            "skipped",
+            "{id} should be dependency-skipped"
+        );
+    }
 }
 
 // ---- Banner (identity) surfaces -------------------------------------------
@@ -815,11 +1058,12 @@ fn doctor_reports_a_corrupt_config_instead_of_refusing_to_run() {
     // `doctor` is the command people reach for when config is broken, so it must
     // still run and report, not bail before printing anything.
     config_command(&dir)
-        .args(["doctor"])
+        .args(["--host", "http://127.0.0.1:9", "--no-retry", "doctor"])
         .assert()
         .code(10)
         .stdout(predicate::str::contains("[FAIL] configuration file"))
         .stdout(predicate::str::contains(expected_path))
+        .stdout(predicate::str::contains("terminal color"))
         .stdout(predicate::str::contains("not ready."));
 }
 
@@ -834,9 +1078,17 @@ fn doctor_reports_a_corrupt_context_file_with_its_path() {
     // only the separators need JSON escaping (backslashes on Windows).
     let expected_json = expected_path.replace('\\', "\\\\");
     config_command(&dir)
-        .args(["doctor", "--json"])
+        .args([
+            "--host",
+            "http://127.0.0.1:9",
+            "--no-retry",
+            "doctor",
+            "--json",
+        ])
         .assert()
         .code(10)
+        .stdout(predicate::str::contains("local.context_file"))
+        .stdout(predicate::str::contains("\"name\": \"context file\""))
         .stdout(predicate::str::contains(expected_json));
 }
 

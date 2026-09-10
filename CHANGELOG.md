@@ -53,10 +53,13 @@ in-progress first release and will be dated and versioned when it ships.
 - Machine-facing output: `--json` / `--quiet` global modes, stable exit
   codes (SPEC §52), raw API body echo in `--json`, and an ANSI-free JSON
   failure envelope on stderr.
-- Connectivity diagnostics: `hamstik doctor` reporting configuration,
-  credential store, authentication health, and terminal rendering probes
-  (color and emoji, with visual sample lines) so users can confirm output
-  will not be mangled on their terminal (`doctor`).
+- Dependency-aware diagnostics: `hamstik doctor` reports configuration and
+  context sources, credential source/store health, proxy presence,
+  network/TLS reachability, live OpenAPI availability and compatibility,
+  authentication, selected Organization/Project validity, and terminal
+  rendering. JSON checks have stable IDs and explicit
+  `pass|warn|fail|skipped` statuses while retaining the original `ok` and
+  `critical` fields (`doctor`).
 - Shell completion scripts via `hamstik completion <shell>` (`completion`).
 - Terminal identity banner on root help and version surfaces (`version`).
 - Project and label colors render as bracketed swatches (`[██]`) in
@@ -90,6 +93,10 @@ in-progress first release and will be dated and versioned when it ships.
 
 ### Fixed
 
+- `doctor` now exits nonzero when a credential-store read fails, reports an
+  invalid `HAMSTIK_TOKEN` only once, distinguishes global configuration from
+  local context failures, preserves API error/request metadata, and avoids
+  interactive terminal samples in redirected output.
 - `work edit --parent` and `work create --parent` forward the current API's
   bounded parent identifier directly so the server remains authoritative for
   identifier resolution and validation (`work`).

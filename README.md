@@ -23,18 +23,21 @@ scripts, and agent workflows.
 ## Quick start
 
 The CLI is not yet distributed as an installable package. Build it from source
-with a Rust toolchain:
+and install the resulting development binary into Cargo's binary directory:
 
 ```bash
 git clone https://github.com/bbs-steven/hamstik-cli.git
 cd hamstik-cli
-cargo build
-cargo run -p hamstik-cli -- --help
-cargo run -p hamstik-cli -- --version
+cargo build --workspace
+cargo install --path crates/hamstik-cli --locked
+hamstik --help
+hamstik --version
 ```
 
-Once built, sign in and start working (a Personal Access Token is stored in the
-OS credential store):
+If Cargo's binary directory is not on `PATH`, invoke the workspace build as
+`./target/debug/hamstik` (or `target\debug\hamstik.exe` on Windows).
+Then sign in and start working; the Personal Access Token is stored in the OS
+credential store:
 
 ```bash
 hamstik auth login --with-token      # reads the PAT from stdin
@@ -99,7 +102,7 @@ the live Hamstik service remains the authoritative implementation.
 
 ## Current capabilities
 
-The Dogfooding Alpha is implemented. Today the CLI provides:
+The Dogfooding Alpha command surface is implemented. Today the CLI provides:
 
 - a native Rust workspace that builds the `hamstik` executable;
 - a typed client for the Hamstik Public API v1 (`/api/v1`) with pagination,
@@ -133,9 +136,10 @@ The Dogfooding Alpha is implemented. Today the CLI provides:
 - attachments — `work attachment list|upload|download|delete`;
 - the unauthenticated live contract via `hamstik api openapi`;
 - automation-friendly output via `--json` / `--quiet` and stable exit codes;
-- shell completions (`hamstik completion <shell>`), connectivity
-  diagnostics (`hamstik doctor`) including terminal rendering checks
-  (color/emoji probes with visual samples), and ANSI-free `--json` output;
+- shell completions (`hamstik completion <shell>`) and dependency-aware
+  diagnostics (`hamstik doctor`) covering local configuration, credential
+  sources, network/TLS, Public API compatibility, authentication, selected
+  Organization/Project validity, and terminal rendering;
 - cross-platform CI on Linux, Windows, and macOS.
 
 OAuth, the MCP server, and the Agent Skill remain future work. See the
@@ -207,6 +211,53 @@ Downloads always write binary data to a file. In `--json` mode stdout contains
 only JSON metadata (path, size, content type, and available response headers),
 never the binary payload. Diagnostics and structured failures go to stderr.
 
+## Context and automation contract
+
+Host, Organization, and Project values resolve in this order:
+
+```text
+command-line flag
+→ HAMSTIK_HOST / HAMSTIK_ORG / HAMSTIK_PROJECT
+→ nearest .hamstik.toml
+→ selected profile defaults
+→ built-in defaults
+```
+
+`HAMSTIK_PROFILE` selects a profile, `HAMSTIK_TOKEN` supplies an ephemeral
+PAT without reading or writing the credential store, and
+`HAMSTIK_CA_BUNDLE` supplies an additional PEM trust bundle. Explicit
+`--host`, `--profile`, `--org`, `--project`, and `--ca-bundle` flags
+override their environment equivalents.
+
+For automation:
+
+- `--json` writes a single valid JSON success document to stdout; structured
+  command failures go to stderr. `doctor` is the deliberate exception: its
+  diagnostic report stays on stdout even when its exit code is nonzero;
+- `--quiet` emits only the essential identifier or result;
+- `--no-input` disables prompts and `--no-retry` disables safe automatic
+  retries;
+- `--cursor` requests one page from an opaque cursor, while `--all` starts at
+  the first page, follows every returned cursor, and emits one deterministic
+  aggregate;
+- `--json` and `--quiet` are mutually exclusive.
+
+Stable process exit codes are:
+
+| Code | Meaning |
+| ---: | --- |
+| 0 | Success |
+| 1 | General/internal failure |
+| 2 | Invalid input or usage |
+| 3 | Authentication failure |
+| 4 | Authorization or insufficient scope |
+| 5 | Resource not found |
+| 6 | Conflict, revision conflict, or idempotency conflict |
+| 7 | Rate limited |
+| 8 | Network/transport failure |
+| 9 | Server or API compatibility failure |
+| 10 | Local configuration or credential-store failure |
+
 ## Credentials, profiles, and logout
 
 `hamstik auth login` validates the PAT against `GET /api/v1/me` before storing
@@ -220,8 +271,10 @@ anything. Two things are then kept in two different places:
 The CLI never falls back to plaintext storage. If no secure credential store is
 reachable — a headless Linux box with no Secret Service, for example — every
 login/logout fails with an explanation instead of writing the token to disk; use
-`HAMSTIK_TOKEN` for headless automation (see SPEC §26). `hamstik doctor` reports
-whether a persistent store was found under the `credential store` check.
+`HAMSTIK_TOKEN` for headless automation (see SPEC §26). `hamstik doctor`
+reports credential-store availability when stored credentials are in use. When
+`HAMSTIK_TOKEN` is active, that check is explicitly reported as skipped
+instead of touching the store.
 
 `hamstik auth logout` is a **local logout**: it removes the stored PAT for the
 selected profile and does not revoke the token server-side (the Public API has
@@ -248,9 +301,38 @@ unsupported schema version, unreadable permissions) is always an error, never
 silently ignored — that would discard profiles and context defaults. The failure
 names the offending file, points at a repair or removal hint, and exits with the
 configuration exit code (10). `hamstik doctor` reports the same problem as a
-`FAIL` line instead of refusing to run, so the rest of the diagnostics —
-including the credential store check, which does not depend on config — stay
-available. The same applies to a broken project-local `.hamstik.toml`.
+`FAIL` line instead of refusing to run. Independent checks continue; checks
+that depend on unavailable configuration are reported as skipped with a reason.
+The same applies to a broken project-local `.hamstik.toml`, which is identified
+separately from the global configuration file.
+
+## Doctor diagnostics
+
+`hamstik doctor` performs dependency-aware checks for:
+
+1. global configuration readability;
+2. local context discovery, parsing, and source resolution;
+3. profile and credential-source resolution;
+4. credential-store configuration and accessibility when used;
+5. host validation and proxy-environment detection;
+6. network reachability and TLS validation;
+7. the unauthenticated `/api/v1/openapi.json` route;
+8. Public API v1 compatibility;
+9. PAT authentication through `/api/v1/me`;
+10. selected Organization and Project accessibility;
+11. terminal color and emoji rendering.
+
+Human output uses `ok`, `WARN`, `FAIL`, and `skip` markers and includes
+concrete remediation hints. Independent checks continue after a failure;
+dependent checks are marked `skip`. The first blocking root cause determines
+the stable process exit code. Additive Public API operations produce a warning,
+while a missing or moved operation required by this CLI is an API compatibility
+failure.
+
+`hamstik doctor --json` adds stable check IDs and explicit
+`pass|warn|fail|skipped` statuses. It preserves API error codes, HTTP status,
+and server request IDs when available. Terminal visual samples are printed only
+for interactive human output and never enter JSON or piped output.
 
 ## Build from source
 
@@ -262,6 +344,10 @@ Prerequisites:
   picks up automatically
 
 No Node.js, Python, or other language runtime is required.
+
+The optional live OpenAPI drift workflow additionally requires a POSIX shell,
+`curl`, `jq`, `cmp`, and `install`. It is not part of normal builds or
+tests.
 
 ```bash
 cargo build --workspace

@@ -103,7 +103,8 @@ pub enum Command {
     Squeakql(SqueakQlArgs),
     /// Inspect the Public API contract.
     Api(ApiArgs),
-    /// Verify configuration, credentials, and connectivity.
+    /// Verify configuration, credentials, connectivity, API compatibility,
+    /// and selected Organization/Project context.
     Doctor,
     /// Generate a shell completion script.
     Completion(CompletionArgs),
