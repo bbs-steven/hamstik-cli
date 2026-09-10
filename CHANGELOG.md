@@ -15,6 +15,9 @@ in-progress first release and will be dated and versioned when it ships.
 
 ### Added
 
+- Canonical portable Hamstik Agent Skill at `skills/hamstik/SKILL.md`, covering
+  credential-safe CLI usage, explicit context discovery, deterministic output,
+  concurrency-aware mutations, Work Item workflows, and structured failure handling.
 - Full support for the current 53-operation Hamstik Public API v1 contract,
   including `me`, first-class `work mine` / `work my`, SqueakQL search via
   `work search`, independent `squeakql validate`, and unauthenticated

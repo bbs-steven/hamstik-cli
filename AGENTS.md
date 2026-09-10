@@ -107,9 +107,18 @@ surfaces (commands, flags, JSON output, exit codes) are called out in a
 
 ## Agent Skill
 
-The canonical Hamstik Agent Skill will live in `skills/` of this repository once the
-relevant CLI command surface exists. Do not create or substantially modify the skill
-until the commands it describes actually exist.
+The canonical Hamstik Agent Skill lives at
+[`skills/hamstik/SKILL.md`](skills/hamstik/SKILL.md) and is versioned with the CLI.
+
+When a task involves creating, reading, updating, transitioning, commenting on,
+searching, or bulk-managing Hamstik Work Items—or querying Hamstik Project or Sprint
+state—read and follow that skill. It explains how to use the official CLI against the
+documented Public API v1 with safe authentication, explicit context, structured output,
+optimistic concurrency, and idempotency behavior.
+
+Keep the skill synchronized with implemented commands and documented contracts. Do not
+describe commands that do not exist, duplicate the REST API specification, or maintain
+independently edited copies for different agent harnesses.
 
 ## Dependencies
 

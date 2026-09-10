@@ -142,7 +142,9 @@ The Dogfooding Alpha command surface is implemented. Today the CLI provides:
   Organization/Project validity, and terminal rendering;
 - cross-platform CI on Linux, Windows, and macOS.
 
-OAuth, the MCP server, and the Agent Skill remain future work. See the
+OAuth, the MCP server, and automatic Agent Skill installation remain future work. The
+canonical portable Agent Skill is available at
+[`skills/hamstik/SKILL.md`](skills/hamstik/SKILL.md). See the
 [design documents](#design-documents) for where the CLI is headed.
 
 ## Command examples
